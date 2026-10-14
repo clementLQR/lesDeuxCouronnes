@@ -1,0 +1,19 @@
+{
+  "name": "les-deux-couronnes",
+  "version": "1.0.0",
+  "description": "Les Deux Couronnes : deux châteaux jouets face à face, en solo ou en multijoueur WebSocket (Three.js)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/clementLQR/lesDeuxCouronnes.git"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

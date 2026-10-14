@@ -1,0 +1,11 @@
+# Configuration Render (Blueprint) : un seul Web Service Node.js qui sert le site et le serveur WebSocket.
+# Sur render.com : New > Blueprint > choisir ce dépôt, ou New > Web Service avec les mêmes réglages.
+services:
+  - type: web
+    name: les-deux-couronnes
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /
+    autoDeploy: true

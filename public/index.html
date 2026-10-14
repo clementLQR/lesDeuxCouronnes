@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Les Deux Couronnes</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root { --team: #d7262e; --teamDark: #a3171d; }
+        body[data-team="blue"] { --team: #1f5fbf; --teamDark: #123f85; }
+        html, body {
+            margin: 0; padding: 0; overflow: hidden; height: 100%;
+            background: #f6e7d2;
+            font-family: 'Baloo 2', system-ui, sans-serif;
+            user-select: none;
+        }
+        #canvas { width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
+        #canvas:active { cursor: grabbing; }
+
+        .panel {
+            background: #fffaf2; color: #3a2a1a;
+            border: 4px solid var(--team); border-radius: 18px;
+            box-shadow: 0 6px 0 var(--teamDark);
+            padding: 10px 16px;
+        }
+        code { background: #f1e6d4; border-radius: 6px; padding: 0 6px; font-size: 0.95em; }
+
+
+        /* barres de vie des châteaux */
+        #bars {
+            position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
+            display: flex; align-items: center; gap: 12px;
+        }
+        .bar { width: 220px; font-weight: 800; font-size: 15px; }
+        .bar .lbl { display: flex; justify-content: space-between; }
+        .bar.red .lbl { color: #d7262e; }
+        .bar.blue .lbl { color: #1f5fbf; }
+        .track { height: 16px; background: #3a2a1a; border-radius: 10px; overflow: hidden; border: 3px solid #3a2a1a; }
+        .fill { height: 100%; width: 100%; border-radius: 6px; transition: width .25s; }
+        .red .fill { background: linear-gradient(#ff5a61, #d7262e); }
+        .blue .fill { background: linear-gradient(#5d97f0, #1f5fbf); margin-left: auto; }
+        .vs { font-size: 26px; font-weight: 800; color: #3a2a1a; text-shadow: 0 2px 0 #fff; }
+
+        /* boutique d'unités */
+        #shop {
+            position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%);
+            display: flex; align-items: center; gap: 12px; padding: 8px 12px;
+        }
+        #gold { font-size: 26px; font-weight: 800; min-width: 100px; white-space: nowrap; }
+        #btns { display: flex; gap: 8px; }
+        .unitBtn {
+            position: relative; display: flex; flex-direction: column; align-items: center;
+            width: 86px; padding: 6px 4px 4px; cursor: pointer;
+            font-family: inherit; color: #3a2a1a;
+            background: #fff3dc; border: 3px solid #3a2a1a; border-radius: 14px;
+            box-shadow: 0 4px 0 #3a2a1a; transition: transform .08s;
+        }
+        .unitBtn:hover:not(:disabled) { transform: translateY(-2px); background: #fff; }
+        .unitBtn:active:not(:disabled) { transform: translateY(3px); box-shadow: 0 1px 0 #3a2a1a; }
+        .unitBtn:disabled { opacity: .45; cursor: not-allowed; }
+        .unitBtn .key {
+            position: absolute; top: -9px; left: -9px; width: 22px; height: 22px; border-radius: 50%;
+            background: var(--team); color: #fff; font-weight: 800; font-size: 13px; line-height: 22px;
+        }
+        .unitBtn .ico { font-size: 26px; line-height: 1.1; }
+        .unitBtn .nm { font-weight: 700; font-size: 13px; line-height: 1.05; text-align: center; }
+        .unitBtn .cost { font-size: 13px; }
+        /* défenses : séparées des troupes, niveau en pastille */
+        .shopSep { width: 3px; align-self: stretch; margin: 2px 2px; border-radius: 2px; background: #d8c6a6; }
+        .defBtn { background: #f3ead8; }
+        .defBtn .lvl {
+            position: absolute; top: -9px; right: -9px; height: 22px; border-radius: 11px; padding: 0 6px; display: none;
+            background: #3a2a1a; color: #fff; font-weight: 800; font-size: 12px; line-height: 22px;
+        }
+        .defBtn .lvl.show { display: block; }
+        .defBtn.built { opacity: 1 !important; background: #e3f2d6; }
+        .defBtn .prog i { background: #3fae49; }
+        @media (max-width: 1250px) {
+            .unitBtn { width: 70px; }
+            .unitBtn .nm { font-size: 11.5px; }
+            .unitBtn .ico { font-size: 22px; }
+        }
+        /* file de formation : nombre en attente + avancement */
+        .unitBtn .queued {
+            position: absolute; top: -9px; right: -9px; min-width: 22px; height: 22px; border-radius: 11px; padding: 0 5px;
+            background: #f6c21a; color: #3a2a1a; font-weight: 800; font-size: 13px; line-height: 22px; display: none;
+            box-sizing: border-box; border: 2px solid #3a2a1a;
+        }
+        .unitBtn .queued.show { display: block; }
+        .unitBtn .prog { width: 100%; height: 5px; border-radius: 3px; background: #ead9bb; overflow: hidden; margin-top: 2px; }
+        .unitBtn .prog i { display: block; height: 100%; width: 0; background: var(--team); }
+
+        /* vie du roi */
+        #king { display: flex; flex-direction: column; gap: 2px; min-width: 96px; }
+        #king .kingLbl { font-size: 12px; font-weight: 700; opacity: .7; line-height: 1; }
+        #kingTxt { font-weight: 800; font-size: 16px; }
+        #king .track { height: 12px; border-width: 2px; }
+        #kingFill { background: linear-gradient(#ff7a7f, #d7262e); }
+
+        /* couronnement */
+        #crownMsg {
+            position: fixed; left: 50%; top: 40%; transform: translate(-50%, -50%);
+            text-align: center; font-size: 22px; font-weight: 800; display: none;
+            border-color: #f6c21a; box-shadow: 0 6px 0 #c99a00;
+        }
+        #crownMsg.show { display: block; }
+        #crownTime { font-size: 44px; color: var(--team); display: block; line-height: 1; }
+
+        #minimap {
+            position: fixed; right: 16px; bottom: 16px; width: 130px; height: 230px;
+            border: 4px solid #3a2a1a; border-radius: 16px; box-shadow: 0 5px 0 #3a2a1a;
+        }
+
+        /* grimoire : sorts des tours de mage (en bas à gauche) */
+        #spells { position: fixed; left: 16px; top: 16px; padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; }
+        .spellsTitle { font-weight: 800; font-size: 14px; }
+        #spellBtns { display: flex; gap: 8px; }
+        .spellBtn {
+            --cd: 0; position: relative; width: 74px; padding: 6px 2px 4px; cursor: pointer; font-family: inherit; color: #3a2a1a;
+            display: flex; flex-direction: column; align-items: center; border: 3px solid #3a2a1a; border-radius: 16px;
+            background: radial-gradient(circle at 50% 30%, #fff6e0, #f0dfc0); box-shadow: 0 4px 0 #3a2a1a; transition: transform .08s;
+        }
+        .spellBtn::after {                                        /* voile de recharge qui se vide en tournant */
+            content: ''; position: absolute; inset: 0; border-radius: 13px; pointer-events: none;
+            background: conic-gradient(rgba(40, 28, 16, .55) calc(var(--cd) * 360deg), transparent 0);
+        }
+        .spellBtn:hover:not(:disabled) { transform: translateY(-2px); }
+        .spellBtn:disabled { cursor: not-allowed; }
+        .spellBtn:disabled .sico { filter: grayscale(.6); opacity: .6; }
+        .spellBtn.locked { background: #e9e2d4; border-style: dashed; }
+        .spellBtn.aiming { background: #ffd6a0; box-shadow: 0 0 0 4px #ff7a1a, 0 4px 0 #3a2a1a; }
+        .spellBtn .skey {
+            position: absolute; top: -9px; left: -9px; width: 22px; height: 22px; border-radius: 50%;
+            background: #6b3fa0; color: #fff; font-weight: 800; font-size: 13px; line-height: 22px; z-index: 1;
+        }
+        .spellBtn .sico { font-size: 26px; line-height: 1.1; }
+        .spellBtn .sname { font-weight: 700; font-size: 12px; line-height: 1.05; text-align: center; }
+        .spellBtn .scost { font-size: 12.5px; }
+        .spellBtn .scd {
+            position: absolute; top: 14px; left: 0; right: 0; text-align: center; z-index: 1;
+            font-weight: 800; font-size: 22px; color: #fff; text-shadow: 0 2px 0 #3a2a1a;
+        }
+        #aimMsg {
+            position: fixed; left: 50%; bottom: 140px; transform: translateX(-50%); display: none;
+            font-size: 17px; font-weight: 700; border-color: #ff7a1a; box-shadow: 0 5px 0 #b84a00;
+        }
+        #aimMsg.show { display: block; }
+        #aimMsg small { font-weight: 600; opacity: .75; }
+
+        #prompt {
+            position: fixed; left: 50%; bottom: 140px; transform: translateX(-50%);
+            font-size: 18px; display: none;
+        }
+        #prompt.show { display: block; }
+        #prompt .ko, #prompt.broken .ok { display: none; }
+        #prompt.broken .ko { display: inline; }
+        #prompt b { display: inline-block; background: var(--team); color: #fff; border-radius: 8px; padding: 0 9px; }
+
+        #toast {
+            position: fixed; left: 50%; top: 92px; transform: translateX(-50%) translateY(-20px);
+            font-size: 18px; font-weight: 700; opacity: 0; transition: .25s; pointer-events: none;
+            border-color: #f6c21a; box-shadow: 0 5px 0 #c99a00;
+        }
+        #toast.show { opacity: 1; transform: translateX(-50%); }
+
+        #lobby {
+            position: fixed; left: 50%; top: 96px; transform: translateX(-50%);
+            text-align: center; font-size: 20px; font-weight: 800; display: none; max-width: 90vw;
+        }
+        #lobby.show { display: block; }
+        #lobby small, #lan { display: block; font-size: 14px; font-weight: 500; margin-top: 4px; }
+
+        .bigBtn {
+            margin-top: 8px; font-family: inherit; font-size: 17px; font-weight: 800; cursor: pointer;
+            color: #fff; background: var(--team); border: 3px solid #3a2a1a; border-radius: 14px;
+            box-shadow: 0 4px 0 #3a2a1a; padding: 4px 18px;
+        }
+        .bigBtn:active { transform: translateY(3px); box-shadow: 0 1px 0 #3a2a1a; }
+
+        #over {
+            position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%) scale(0);
+            text-align: center; padding: 20px 36px; transition: transform .4s cubic-bezier(.3, 1.6, .5, 1);
+            border-color: #f6c21a; box-shadow: 0 8px 0 #c99a00;
+        }
+        #over.show { transform: translate(-50%, -50%) scale(1); }
+        #overTitle { font-size: 36px; font-weight: 800; }
+        #overText { font-size: 17px; }
+
+        /* flash rouge quand ton château prend un gros coup */
+        body::after {
+            content: ''; position: fixed; inset: 0; pointer-events: none;
+            box-shadow: inset 0 0 120px rgba(215, 38, 46, .0);
+        }
+        body.hit::after { animation: hit .6s; }
+        @keyframes hit { 30% { box-shadow: inset 0 0 120px rgba(215, 38, 46, .55); } }
+
+
+        /* ---------------------------------------------------------------- menu de démarrage */
+        body.menu #bars, body.menu #shop, body.menu #minimap,
+        body.menu #lobby, body.menu #prompt, body.menu #crownMsg, body.menu #spells, body.menu #aimMsg { display: none !important; }
+        #menu {
+            position: fixed; inset: 0; display: none; overflow-y: auto;
+            background: radial-gradient(ellipse at 50% 30%, rgba(246, 231, 210, .3), rgba(246, 231, 210, .9) 75%);
+        }
+        body.menu #menu { display: block; }
+        .menuInner { max-width: 960px; margin: 0 auto; padding: 26px 16px 40px; display: flex; flex-direction: column; gap: 18px; }
+        .menuTitle { text-align: center; color: #3a2a1a; }
+        .menuTitle h1 {
+            margin: 0; font-size: clamp(38px, 7vw, 64px); line-height: 1; font-weight: 800;
+            color: #fffaf2; -webkit-text-stroke: 3px #3a2a1a; paint-order: stroke fill;
+            text-shadow: 0 5px 0 #3a2a1a;
+        }
+        .menuTitle h1 .gold { color: #f6c21a; }
+        .tagline { margin-top: 6px; font-size: 20px; font-weight: 800; letter-spacing: 3px; text-transform: uppercase; color: #3a2a1a; }
+        .tagline .sk { color: #d7262e; } .tagline .li { color: #1f5fbf; }
+        .menuTitle p { margin: 8px auto 0; font-size: 18px; font-weight: 700; max-width: 560px; }
+        .view { display: none; flex-direction: column; gap: 16px; }
+        .view.active { display: flex; animation: viewIn .35s cubic-bezier(.3, 1.4, .5, 1); }
+        @keyframes viewIn { from { opacity: 0; transform: translateY(14px) scale(.98); } }
+        .menuInner .panel { border-color: #3a2a1a; box-shadow: 0 6px 0 #3a2a1a; }
+        .note { min-height: 1.2em; font-size: 14px; font-weight: 700; color: #a3171d; }
+
+        /* accueil : deux grandes tuiles */
+        .tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+        .tile {
+            position: relative; overflow: hidden; font-family: inherit; cursor: pointer; text-align: left; color: #fff;
+            border: 4px solid #3a2a1a; border-radius: 24px; box-shadow: 0 8px 0 #3a2a1a; padding: 22px;
+            display: flex; flex-direction: column; gap: 4px; min-height: 190px; transition: transform .12s;
+        }
+        .tile.solo { background: linear-gradient(150deg, #e2453c, #a3171d); }
+        .tile.multi { background: linear-gradient(150deg, #3f7fe0, #123f85); }
+        .tile::after {
+            content: ''; position: absolute; right: -40px; bottom: -50px; width: 190px; height: 190px;
+            border-radius: 50%; background: rgba(255, 255, 255, .12);
+        }
+        .tile:hover:not(:disabled) { transform: translateY(-4px) rotate(-.5deg); }
+        .tile:active:not(:disabled) { transform: translateY(4px); box-shadow: 0 3px 0 #3a2a1a; }
+        .tile:disabled { filter: grayscale(.7); opacity: .6; cursor: not-allowed; }
+        .tileIco { font-size: 54px; line-height: 1; filter: drop-shadow(0 3px 0 rgba(0, 0, 0, .25)); }
+        .tileName { font-size: 34px; font-weight: 800; line-height: 1.05; margin-top: auto; text-shadow: 0 3px 0 rgba(0, 0, 0, .25); }
+        .tileSub { font-size: 16px; font-weight: 600; opacity: .92; }
+        .tileBadge {
+            position: absolute; top: 14px; right: 14px; z-index: 1; background: #f6c21a; color: #3a2a1a;
+            font-weight: 800; font-size: 14px; border: 3px solid #3a2a1a; border-radius: 99px; padding: 0 10px;
+        }
+        .tileBadge:empty { display: none; }
+        .rules { font-size: 15px; line-height: 1.4; }
+        .rules summary { cursor: pointer; font-weight: 800; font-size: 18px; list-style: none; }
+        .rules summary::-webkit-details-marker { display: none; }
+        .rules summary::after { content: ' ▾'; }
+        .rules[open] summary::after { content: ' ▴'; }
+        .rules .oyez { margin: 8px 0 0; font-style: italic; font-weight: 600; }
+        .rules ul { margin: 6px 0 0; padding-left: 20px; }
+        .rules li { margin-bottom: 4px; }
+
+        /* en-tête des écrans */
+        .viewHead { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+        .viewHead h2 { margin: 0; font-size: 30px; color: #3a2a1a; text-shadow: 0 2px 0 #fff; }
+        .back {
+            font-family: inherit; font-weight: 800; font-size: 16px; cursor: pointer; color: #3a2a1a;
+            background: #fffaf2; border: 3px solid #3a2a1a; border-radius: 14px; box-shadow: 0 4px 0 #3a2a1a; padding: 4px 14px;
+        }
+        .back:active { transform: translateY(3px); box-shadow: 0 1px 0 #3a2a1a; }
+        .lanChip {
+            margin-left: auto; background: #fffaf2; border: 3px solid #3a2a1a; border-radius: 99px;
+            padding: 2px 12px; font-weight: 700; font-size: 14px;
+        }
+        .lanChip code { background: none; padding: 0; }
+        .stepPanel { display: flex; flex-direction: column; gap: 10px; padding: 16px 18px; }
+        .stepPanel h3 { margin: 0; font-size: 18px; }
+
+        /* choix du château */
+        .teamCards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+        .teamCard {
+            font-family: inherit; cursor: pointer; color: #3a2a1a; background: #fff3dc; text-align: left;
+            border: 3px solid #3a2a1a; border-radius: 18px; box-shadow: 0 5px 0 #3a2a1a; padding: 10px;
+            display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 10px; align-items: center; transition: transform .12s;
+        }
+        .tcIco {
+            grid-row: 1 / 3; font-size: 34px; line-height: 1; width: 54px; height: 54px; display: grid; place-items: center;
+            border-radius: 50%; border: 3px solid #3a2a1a;
+        }
+        .teamCard.red .tcIco { background: #2a2a30; }
+        .teamCard.blue .tcIco { background: #1f5fbf; }
+        .tcName { font-weight: 800; font-size: 17px; line-height: 1.1; }
+        .tcSub { font-size: 13px; opacity: .75; }
+        .teamCard.sel { transform: translateY(-2px); color: #fff; }
+        .teamCard.red.sel { background: #d7262e; }
+        .teamCard.blue.sel { background: #1f5fbf; }
+        .teamCard.blue.sel .tcIco { background: #123f85; }
+        .teamCard:disabled { opacity: .45; cursor: not-allowed; transform: none; }
+        .teamCards.small .tcIco { width: 42px; height: 42px; font-size: 26px; }
+
+        /* difficulté */
+        .levelCards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+        .levelCard {
+            font-family: inherit; cursor: pointer; color: #3a2a1a; background: #fff3dc; border: 3px solid #3a2a1a;
+            border-radius: 16px; box-shadow: 0 5px 0 #3a2a1a; padding: 10px 8px; display: flex; flex-direction: column;
+            align-items: center; text-align: center; gap: 2px; transition: transform .12s;
+        }
+        .levelCard .lvIco { font-size: 30px; line-height: 1.1; }
+        .levelCard b { font-size: 17px; }
+        .levelCard small { font-size: 12.5px; opacity: .8; line-height: 1.25; }
+        .levelCard.sel { background: var(--team); color: #fff; transform: translateY(-2px); }
+        .levelCard.sel small { opacity: .95; }
+        .bigBtn.go { font-size: 21px; padding: 8px 18px; margin-top: 4px; }
+        .bigBtn:disabled { opacity: .45; cursor: not-allowed; }
+
+        /* hall des salons */
+        .hallBar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: space-between; padding: 10px 14px; }
+        .codeJoin { display: flex; gap: 6px; align-items: center; font-weight: 800; }
+        #codeInput { width: 96px; text-transform: uppercase; letter-spacing: 3px; text-align: center; font-weight: 800; }
+        .filters { display: flex; gap: 6px; flex-wrap: wrap; }
+        .filters button {
+            font-family: inherit; font-weight: 700; font-size: 14px; cursor: pointer; color: #3a2a1a;
+            background: #fff3dc; border: 3px solid #3a2a1a; border-radius: 99px; padding: 1px 12px;
+        }
+        .filters button.sel { background: #3a2a1a; color: #fff; }
+        .smallBtn {
+            font-family: inherit; font-weight: 800; font-size: 15px; cursor: pointer; color: #fff; background: var(--team);
+            border: 3px solid #3a2a1a; border-radius: 12px; box-shadow: 0 3px 0 #3a2a1a; padding: 2px 12px;
+        }
+        .smallBtn:active { transform: translateY(2px); box-shadow: 0 1px 0 #3a2a1a; }
+        .menuInput {
+            font-family: inherit; font-size: 15px; font-weight: 600; color: #3a2a1a; min-width: 0;
+            background: #fff; border: 3px solid #3a2a1a; border-radius: 12px; padding: 5px 10px;
+        }
+        .menuInput:focus { outline: none; border-color: var(--team); }
+        .roomGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; }
+        .roomCard {
+            font-family: inherit; cursor: pointer; color: #3a2a1a; text-align: left; background: #fffaf2;
+            border: 4px solid #3a2a1a; border-radius: 20px; box-shadow: 0 6px 0 #3a2a1a; padding: 12px 14px;
+            display: flex; flex-direction: column; gap: 10px; min-height: 150px; transition: transform .12s;
+        }
+        .roomCard:hover:not(:disabled) { transform: translateY(-3px); }
+        .roomCard:active:not(:disabled) { transform: translateY(3px); box-shadow: 0 2px 0 #3a2a1a; }
+        .roomCard:disabled { opacity: .55; cursor: not-allowed; }
+        .roomCard.create {
+            border-style: dashed; background: rgba(255, 250, 242, .75); box-shadow: none;
+            align-items: center; justify-content: center; text-align: center; gap: 2px;
+        }
+        .roomCard.create .plus {
+            font-size: 40px; font-weight: 800; line-height: 1; width: 62px; height: 62px; border-radius: 50%;
+            display: grid; place-items: center; background: var(--team); color: #fff;
+            border: 3px solid #3a2a1a; box-shadow: 0 4px 0 #3a2a1a; margin-bottom: 6px;
+        }
+        .roomCard.create b { font-size: 19px; }
+        .roomCard.create small { font-size: 13px; opacity: .7; }
+        .rcTop { display: flex; align-items: center; gap: 6px; }
+        .rcName { font-weight: 800; font-size: 19px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .rcLock { font-size: 15px; background: #f6c21a; border: 2px solid #3a2a1a; border-radius: 10px; padding: 0 5px; }
+        .rcBottom { display: flex; justify-content: space-between; align-items: center; margin-top: auto; }
+        .rcCode { font-weight: 800; font-size: 13px; opacity: .55; letter-spacing: 1px; }
+        .chip { font-size: 13px; font-weight: 800; border-radius: 99px; padding: 1px 10px; border: 2px solid #3a2a1a; }
+        .chip.waiting { background: #d6f0c4; }
+        .chip.playing { background: #ffd9a8; }
+        .chip.over { background: #e6e2da; }
+        .chip.full { background: #f3c1c1; }
+        .emptyRooms {
+            display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center;
+            font-weight: 700; color: #6b5a48; gap: 4px; padding: 10px;
+        }
+        .emptyRooms span { font-size: 34px; }
+
+        /* places d'un salon : deux par château */
+        .seats { display: flex; align-items: center; justify-content: center; gap: 8px; }
+        .side { display: flex; align-items: center; gap: 4px; }
+        .sideIco { font-size: 20px; }
+        .seat {
+            width: 30px; height: 30px; border-radius: 50%; border: 3px dashed rgba(58, 42, 26, .35);
+            display: grid; place-items: center; font-size: 15px; box-sizing: border-box;
+        }
+        .seat.red.on { background: #d7262e; border: 3px solid #3a2a1a; }
+        .seat.blue.on { background: #1f5fbf; border: 3px solid #3a2a1a; }
+        .seat.bot { background: #cfd3d8; border: 3px solid #3a2a1a; }
+        .vsMini { font-weight: 800; font-size: 13px; opacity: .55; }
+        .seats.big { padding: 6px 0; }
+        .seats.big .seat { width: 44px; height: 44px; font-size: 22px; }
+        .seats.big .sideIco { font-size: 30px; }
+
+        /* fenêtres (créer / rejoindre un salon) */
+        .modal { position: fixed; inset: 0; display: none; place-items: center; background: rgba(40, 28, 16, .45); padding: 16px; z-index: 5; }
+        .modal.open { display: grid; animation: fadeIn .2s; }
+        @keyframes fadeIn { from { opacity: 0; } }
+        .modalBox {
+            position: relative; width: min(440px, 100%); box-sizing: border-box; display: flex; flex-direction: column; gap: 10px;
+            padding: 20px 22px; border-color: #3a2a1a; box-shadow: 0 8px 0 #3a2a1a;
+            animation: pop .3s cubic-bezier(.3, 1.5, .5, 1); max-height: calc(100vh - 32px); overflow-y: auto;
+        }
+        @keyframes pop { from { transform: scale(.85); opacity: 0; } }
+        .modalBox h2 { margin: 0; font-size: 26px; padding-right: 36px; overflow-wrap: anywhere; }
+        .modalBox h3 { margin: 4px 0 0; font-size: 16px; }
+        .modalBox label { display: flex; flex-direction: column; gap: 4px; font-weight: 700; font-size: 15px; }
+        .close {
+            position: absolute; top: 12px; right: 12px; width: 34px; height: 34px; border-radius: 50%;
+            font-family: inherit; font-size: 16px; font-weight: 800; cursor: pointer; color: #3a2a1a;
+            background: #fff3dc; border: 3px solid #3a2a1a;
+        }
+        .modalBox .switch { flex-direction: row; align-items: center; gap: 10px; cursor: pointer; }
+        .switch input { position: absolute; opacity: 0; pointer-events: none; }
+        .slider {
+            width: 46px; height: 26px; border-radius: 99px; background: #d8ccb8; border: 3px solid #3a2a1a;
+            position: relative; flex: none; transition: background .2s; box-sizing: border-box;
+        }
+        .slider::after {
+            content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
+            background: #fff; border: 2px solid #3a2a1a; transition: transform .2s;
+        }
+        .switch input:checked + .slider { background: var(--team); }
+        .switch input:checked + .slider::after { transform: translateX(20px); }
+        .switch input:focus-visible + .slider { outline: 3px solid #f6c21a; }
+        .roomInfo { text-align: center; font-weight: 700; font-size: 14px; opacity: .8; }
+        @media (max-width: 700px) {
+            .tiles, .levelCards { grid-template-columns: minmax(0, 1fr); }
+            .tile { min-height: 140px; }
+            .lanChip { margin-left: 0; }
+        }
+
+        @media (max-width: 900px) {
+            .bar { width: 130px; font-size: 12px; }
+            .unitBtn { width: 66px; }
+            .unitBtn .nm { font-size: 11px; }
+            #gold { font-size: 18px; min-width: 70px; }
+            #minimap { width: 90px; height: 160px; bottom: 120px; }
+        }
+    </style>
+    <script type="importmap">
+        {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.186.1/examples/jsm/"
+        }
+        }
+    </script>
+</head>
+<body data-team="red" class="menu">
+    <canvas id="canvas"></canvas>
+
+    <div id="bars">
+        <div class="bar red panel" style="border-color:#d7262e;box-shadow:0 5px 0 #a3171d;padding:6px 10px">
+            <div class="lbl"><span>💀 Crâne</span><span id="hpRedTxt">2500</span></div>
+            <div class="track"><div class="fill" id="hpRed"></div></div>
+        </div>
+        <div class="vs">VS</div>
+        <div class="bar blue panel" style="border-color:#1f5fbf;box-shadow:0 5px 0 #123f85;padding:6px 10px">
+            <div class="lbl"><span id="hpBlueTxt">2500</span><span>Lion 🦁</span></div>
+            <div class="track"><div class="fill" id="hpBlue"></div></div>
+        </div>
+    </div>
+
+    <div id="shop" class="panel">
+        <div id="king">
+            <span class="kingLbl">Vie du roi</span>
+            <span id="kingTxt">❤️ 300</span>
+            <div class="track"><div class="fill" id="kingFill"></div></div>
+        </div>
+        <div id="gold">🪙 <span id="goldVal">0</span></div>
+        <div id="btns"></div>
+    </div>
+
+    <canvas id="minimap" width="130" height="230"></canvas>
+
+    <div id="prompt" class="panel"><span class="ok">Appuie sur <b>E</b> pour <span id="promptText">lever le pont-levis</span></span><span class="ko">⛓️ Les chaînes de ton pont-levis ont cassé : il ne peut plus se relever !</span></div>
+    <div id="spells" class="panel">
+        <div class="spellsTitle">🔮 Grimoire des mages</div>
+        <div id="spellBtns"></div>
+    </div>
+    <div id="aimMsg" class="panel">☄️ Clique sur le champ de bataille pour lancer la boule de feu <small>(clic droit ou Échap pour annuler)</small></div>
+    <div id="crownMsg" class="panel">Le roi est tombé… Vive le roi !<br>Nouveau couronnement dans <span id="crownTime">5</span></div>
+    <div id="toast" class="panel"></div>
+
+    <div id="lobby" class="panel">
+        <div id="lobbyText">Connexion au serveur…</div>
+        <div id="lan"></div>
+        <button id="menuBtn" class="bigBtn">↩ Retour au menu</button>
+    </div>
+
+    <div id="over" class="panel">
+        <div id="overTitle">Victoire !</div>
+        <div id="overText"></div>
+        <button id="again" class="bigBtn">Rejouer</button>
+        <button id="overMenu" class="bigBtn">Menu</button>
+    </div>
+
+
+    <!-- menu de démarrage : accueil, partie solo, hall des salons, fenêtres pour créer / rejoindre un salon -->
+    <div id="menu">
+        <div class="menuInner">
+            <div class="menuTitle">
+                <h1>Les Deux <span class="gold">Couronnes</span></h1>
+                <div class="tagline"><span class="li">🦁 Lion</span> contre <span class="sk">Crâne 💀</span></div>
+                <p>Quand la lumière s'éteint dans la chambre, les jouets se réveillent… Sur le grand tapis, le royaume du Lion
+                    et le royaume du Crâne se disputent depuis la nuit des temps. Lève ton armée, fais céder le pont-levis d'en face
+                    et file, couronne en tête, jusqu'à son trésor !</p>
+            </div>
+
+            <!-- accueil -->
+            <section class="view active" data-view="home">
+                <div class="tiles">
+                    <button class="tile solo" data-go="solo">
+                        <span class="tileIco">⚔️</span>
+                        <span class="tileName">Solo</span>
+                        <span class="tileSub">Défie le roi d'en face, mené par la magie de l'ordinateur</span>
+                    </button>
+                    <button class="tile multi" data-go="multi">
+                        <span class="tileBadge" id="roomCount"></span>
+                        <span class="tileIco">🏰</span>
+                        <span class="tileName">Multijoueur</span>
+                        <span class="tileSub">Ouvre un salon et convie un ami à la bataille</span>
+                    </button>
+                </div>
+                <small class="note" id="homeNote"></small>
+                <details class="rules panel">
+                    <summary>📜 Le Grand Parchemin des règles</summary>
+                    <p class="oyez">Oyez, oyez, jeunes seigneurs ! Voici les lois du royaume du tapis :</p>
+                    <ul>
+                        <li><b>🛡️ Lève ton armée.</b> Dans ta caserne, entraîne soldats, archers et chevaliers. Dans ton atelier,
+                            fais bâtir canons et catapultes (touches <b>1</b> à <b>5</b>). Tes soldats quittent le château par le pont-levis.</li>
+                        <li><b>🪙 Remplis ton coffre.</b> Ton royaume te verse de l'or chaque seconde, et chaque soldat ennemi vaincu
+                            te rapporte la moitié de ce qu'il a coûté à son roi. Dépense-le avec sagesse !</li>
+                        <li><b>👑 Le roi aussi se bat.</b> Ton roi brandit son arme (<b>F</b> ou clic). S'il tombe, pas de panique :
+                            un nouveau roi est couronné dans ta cour 5 secondes plus tard.</li>
+                        <li><b>⛓️ Le pont-levis.</b> Lève-le (<b>E</b>) pour mettre ton trésor à l'abri… mais tes soldats
+                            resteront enfermés derrière !</li>
+                        <li><b>🏰 Les défenses.</b> Avec ton or (touches <b>6</b> à <b>9</b>), renforce tes tours 🏹, fais chauffer
+                            de l'huile au-dessus de la porte 🔥, dresse des barricades devant le pont-levis 🪵, ou plante un chapiteau 🎪
+                            hors les murs : tes soldats y sont formés et partent sans ouvrir le pont-levis. Mais gare, l'ennemi peut l'abattre !</li>
+                        <li><b>🔮 Les tours de mage.</b> Bâties derrière ton château, nul ne peut les abattre. Chacune t'apprend un sort,
+                            payé en or à chaque lancer (touches <b>R</b>, <b>T</b>, <b>Y</b>) : 🧪 la potion de vie soigne ton roi,
+                            ☄️ la boule de feu s'abat où tu vises, et 🐉 la plus précieuse invoque le dragon de ton royaume, qui réduit en cendres
+                            toutes les troupes ennemies qu'il survole (mais ne touche pas aux constructions, et ne rapporte pas d'or) !</li>
+                        <li><b>🏆 La victoire.</b> Quand un château n'a plus de points de vie, ses chaînes cassent et son pont-levis
+                            reste baissé pour toujours. Le premier roi qui entre dans la salle au trésor d'en face remporte la couronne !</li>
+                    </ul>
+                </details>
+            </section>
+
+            <!-- partie solo -->
+            <section class="view" data-view="solo">
+                <div class="viewHead">
+                    <button class="back" data-go="home">← Retour</button>
+                    <h2>⚔️ Défi au roi d'en face</h2>
+                </div>
+                <div class="panel stepPanel">
+                    <h3>1. Choisis ton royaume</h3>
+                    <div class="teamCards" data-team-picker></div>
+                    <h3>2. Choisis ton adversaire</h3>
+                    <div class="levelCards">
+                        <button class="levelCard" data-level="easy"><span class="lvIco">🌱</span><b>L'Écuyer</b>
+                            <small>Un jeune roi qui bâille sur son trône et oublie de lever son pont-levis. (Facile)</small></button>
+                        <button class="levelCard sel" data-level="normal"><span class="lvIco">⚔️</span><b>Le Chevalier</b>
+                            <small>Un roi vaillant qui lève son armée aussi vite que toi et se méfie de tes visites. (Normal)</small></button>
+                        <button class="levelCard" data-level="hard"><span class="lvIco">🐉</span><b>Le Dragon</b>
+                            <small>Un roi rusé au coffre bien garni : 30 % d'or en plus. Tiens bon ! (Difficile)</small></button>
+                    </div>
+                    <small class="note" id="soloNote"></small>
+                    <button class="bigBtn go" id="soloBtn">🎺 Sonner la charge !</button>
+                </div>
+            </section>
+
+            <!-- hall des salons -->
+            <section class="view" data-view="multi">
+                <div class="viewHead">
+                    <button class="back" data-go="home">← Retour</button>
+                    <h2>🏰 La salle des tournois</h2>
+                    <div class="lanChip" title="Ton adversaire ouvre cette adresse pour rejoindre la salle des tournois">📡 <span id="menuLan">…</span></div>
+                </div>
+                <div class="panel hallBar">
+                    <div class="codeJoin">
+                        <span>Code :</span>
+                        <input id="codeInput" class="menuInput" maxlength="4" placeholder="ABCD" autocomplete="off" spellcheck="false">
+                        <button class="smallBtn" id="codeBtn">Rejoindre</button>
+                    </div>
+                    <div class="filters">
+                        <button data-filter="all" class="sel">Tous</button>
+                        <button data-filter="waiting">En attente</button>
+                        <button data-filter="open">Sans mot de passe</button>
+                    </div>
+                </div>
+                <small class="note" id="multiNote"></small>
+                <div id="roomList" class="roomGrid"></div>
+            </section>
+        </div>
+
+        <!-- fenêtre : créer un salon -->
+        <div class="modal" id="createModal">
+            <div class="modalBox panel" role="dialog" aria-modal="true" aria-labelledby="createTitle">
+                <button class="close" data-close aria-label="Fermer">✕</button>
+                <h2 id="createTitle">✨ Ouvrir un salon</h2>
+                <label>Nom du salon
+                    <input id="roomName" class="menuInput" maxlength="24" placeholder="La Table ronde" autocomplete="off">
+                </label>
+                <label class="switch">
+                    <input type="checkbox" id="roomLocked">
+                    <span class="slider"></span>
+                    <span>Salon secret, gardé par un mot de passe 🔒</span>
+                </label>
+                <input id="roomPass" class="menuInput" maxlength="32" type="password" placeholder="Le mot de passe secret" autocomplete="new-password" hidden>
+                <h3>Ton royaume</h3>
+                <div class="teamCards small" data-team-picker></div>
+                <small class="note" id="createNote"></small>
+                <button class="bigBtn go" id="createBtn">🏰 Ouvrir les portes</button>
+            </div>
+        </div>
+
+        <!-- fenêtre : rejoindre un salon -->
+        <div class="modal" id="joinModal">
+            <div class="modalBox panel" role="dialog" aria-modal="true" aria-labelledby="joinTitle">
+                <button class="close" data-close aria-label="Fermer">✕</button>
+                <h2 id="joinTitle">Salon</h2>
+                <div id="joinSeats"></div>
+                <div class="roomInfo" id="joinInfo"></div>
+                <input id="joinPass" class="menuInput" type="password" maxlength="32" placeholder="🔒 Le mot de passe secret" autocomplete="off">
+                <h3>Ton royaume</h3>
+                <div class="teamCards small" data-team-picker></div>
+                <small class="note" id="joinNote"></small>
+                <button class="bigBtn go" id="joinBtn">⚔️ Franchir les portes</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="main.js" type="module"></script>
+</body>
+</html>
