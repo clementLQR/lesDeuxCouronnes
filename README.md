@@ -16,6 +16,7 @@ Jeu 3D dans le navigateur, réalisé avec [Three.js](https://threejs.org/) et un
 - **Les ordres** : toute l'armée obéit à un même ordre. ⚔️ **Attaquer** (`V`) : marcher sur le château ennemi ; 🛡️ **Défendre** (`B`) : tenir la ligne devant son pont-levis, sous l'étendard ; 👑 **Suivre le roi** (`N`) : escorter son roi, en passant par les portes, jusque dans le château adverse.
 - **Forces et faiblesses** : les lances des soldats battent les chevaliers (dégâts ×2,5) et le bélier (×3), les chevaliers battent les archers (×2), les archers battent les soldats (×2). À l'inverse, les chevaliers frappent moins fort les soldats (×0,7) et les flèches rebondissent sur leur armure (×0,6).
 - **Les défenses** (touches `7`, `8`, `9` et `0`) : renforcer ses tours, chauffer l'huile, dresser des barricades ou un chapiteau hors les murs. Tenir un siège devient possible… mais les canons ennemis finissent toujours par user les murs.
+- **L'armure royale** : flèches des tours et huile bouillante ne font qu'un tiers environ de leurs dégâts à un roi, qui peut ainsi foncer jusqu'au trésor.
 - **La victoire** : un château à 0 PV voit son pont-levis céder pour de bon. Le premier roi qui entre dans la salle au trésor adverse gagne.
 
 | Troupe | Coût | Prime | Formation |
@@ -33,7 +34,7 @@ Jeu 3D dans le navigateur, réalisé avec [Three.js](https://threejs.org/) et un
 | 🏹 Tours de garde | 2 (150), 3 (300) | Flèches plus fortes, plus rapides, plus lointaines ; au niveau 3 les deux tours tirent ensemble. |
 | 🔥 Huile bouillante | 1 (200), 2 (350) | Un chaudron au-dessus de la porte arrose régulièrement tous les ennemis massés devant. |
 | 🪵 Barricades | 1 (120), 2 (220) | Placées d'office devant le pont-levis : soldats, chevaliers et roi ennemis doivent les abattre pour passer. Niveau 2 : chevaux de frise qui blessent ceux qui frappent. |
-| 🎪 Chapiteau | 200 | Une caserne hors les murs : les troupes qui y sont formées partent sans passer par le pont-levis. L'ennemi peut l'abattre (on peut le redresser). |
+| 🎪 Chapiteau | 200 | Une caserne hors les murs : les troupes qui y sont formées partent sans passer par le pont-levis. Fragile (300 PV) : les engins de siège ennemis le pilonnent de loin. Abattu, il faut attendre 40 s pour le redresser (20 s pour des barricades). |
 
 **Les tours de mage** se bâtissent derrière le château. Elles sont indestructibles et les troupes les ignorent. Chacune débloque un sort, payé à chaque lancer :
 

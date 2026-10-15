@@ -80,10 +80,12 @@ const DEFENSES = {
         { cost: 120, hp: 450, thorns: 0 },
         { cost: 220, hp: 900, thorns: 5 },                               // chevaux de frise : piquent ceux qui frappent
     ] },
-    tent: { name: 'Chapiteau', icon: '🎪', levels: [null, { cost: 200, hp: 500 }] },
+    tent: { name: 'Chapiteau', icon: '🎪', levels: [null, { cost: 200, hp: 300 }] },
 };
 const DEF_KEYS = Object.keys(DEFENSES);
 const STRUCTURE_BOUNTY = { barricade: 60, tent: 100 };
+// une construction abattue ne peut pas être relevée tout de suite (secondes)
+const REBUILD_CD = { barricade: 20, tent: 40 };
 // le chapiteau (caserne hors les murs) et la ligne de barricades, dans le repère local du château
 const TENT = { pos: [-7.5, 17.5], door: [-4.9, 17.5], r: 2.4 };
 const BARRICADE = { z: 14.2, half: 4.6 };
@@ -101,6 +103,8 @@ const MAGE_TOP = 11.5;         // hauteur d'où partent les sorts (balcon des to
 const DRAGON_Y = 8;
 const PLAYER_DMG = 30, PLAYER_CD = 0.45;
 const KING_HP = 300, KING_BOUNTY = 100, RESPAWN = 5, BOT_SPEED = 4;
+// le roi porte une armure royale : flèches des tours et huile bouillante ne lui font qu'une partie de leurs dégâts
+const KING_ARMOR = 0.35;
 // niveaux de l'IA (mode solo) : rythme de décision, bonus de revenu, réflexe de lever le pont-levis
 const LEVELS = {
     easy:   { think: 2.4, income: 0.75, door: false },
@@ -183,6 +187,7 @@ function newGame(phase = 'waiting') {
         towerSide: { red: 1, blue: 1 },
         def: { red: { towers: 0, oil: 0, barricade: 0, tent: 0 }, blue: { towers: 0, oil: 0, barricade: 0, tent: 0 } },
         defHp: { red: { barricade: 0, tent: 0 }, blue: { barricade: 0, tent: 0 } },
+        defCd: { red: { barricade: 0, tent: 0 }, blue: { barricade: 0, tent: 0 } },   // délai avant reconstruction
         oilCd: { red: 0, blue: 0 },
         orders: { red: { mode: 'attack', king: null }, blue: { mode: 'attack', king: null } },
         mage: { red: { potion: false, fireball: false, dragon: false }, blue: { potion: false, fireball: false, dragon: false } },
@@ -304,7 +309,7 @@ function buyDefense(team, key) {
     const d = DEFENSES[key];
     if (!d || game.phase !== 'playing') return false;
     const next = d.levels[game.def[team][key] + 1];
-    if (!next || game.gold[team] < next.cost) return false;
+    if (!next || game.gold[team] < next.cost || game.defCd[team][key] > 0) return false;
     game.gold[team] -= next.cost;
     game.def[team][key]++;
     game.stats[team].built++;
@@ -320,6 +325,7 @@ function damageDefense(team, key, dmg, byTeam) {
     if (game.defHp[team][key] > 0) return;
     game.def[team][key] = 0;
     game.defHp[team][key] = 0;
+    game.defCd[team][key] = REBUILD_CD[key];
     earn(byTeam, STRUCTURE_BOUNTY[key]);
     if (key === 'tent') {                                   // les recrues du chapiteau rentrent à la caserne
         game.queue[team].barracks.push(...game.queue[team].tent);
@@ -328,6 +334,20 @@ function damageDefense(team, key, dmg, byTeam) {
     }
     fx.push({ k: 'defDown', key, team });
     broadcast({ t: 'msg', text: key === 'tent' ? `🎪 Le chapiteau ${whoOf(team)} s'effondre !` : `🪵 Les barricades ${whoOf(team)} volent en éclats !` });
+}
+
+// obstacle ennemi à portée d'un engin de siège : { key, x, y, z } du point visé, ou null
+function siegeTarget(u, enemy, range) {
+    if (game.def[enemy].tent) {
+        const [x, , z] = toWorld(enemy, TENT.pos[0], 0, TENT.pos[1]);
+        if (Math.hypot(x - u.x, z - u.z) - TENT.r <= range) return { key: 'tent', x, y: 2.2, z };
+    }
+    if (game.def[enemy].barricade) {
+        const [lx] = toLocal(enemy, u.x, u.z);
+        const [x, , z] = toWorld(enemy, Math.max(-BARRICADE.half, Math.min(BARRICADE.half, lx)), 0, BARRICADE.z);
+        if (Math.hypot(x - u.x, z - u.z) <= range) return { key: 'barricade', x, y: 0.8, z };
+    }
+    return null;
 }
 
 // position d'un point par rapport à la ligne de barricades d'un château
@@ -363,7 +383,20 @@ function setOrder(team, mode, kingId) {
     const o = game.orders[team];
     if (o.mode === mode && o.king === kingId) return;
     game.orders[team] = { mode, king: mode === 'follow' ? kingId : null };
+    if (mode === 'attack') for (const u of game.units) if (u.team === team) resumePath(u);
     for (const p of players.values()) if (p.team === team) send(p.ws, { t: 'order', mode, text: ORDER_TEXT[mode] });
+}
+
+// après « défendre » ou « suivre le roi », une troupe repart à l'attaque depuis là où elle est :
+// on saute les étapes du chemin déjà dépassées au lieu de la renvoyer au pied de sa propre rampe
+function resumePath(u) {
+    if (u.inside) return;
+    if (isInCastle(u.team, u.x, u.z)) { u.inside = 2; u.wp = 0; return; }   // dans sa cour : on ressort par la porte
+    const f = u.z * dirOf(u.team);
+    u.wp = 0;
+    while (u.wp < PATH.length && PATH[u.wp].f < f + 1) u.wp++;
+    // déjà au pied du château ennemi : dernière étape, devant la porte
+    if (u.wp >= PATH.length) u.wp = PATH.length - 1;
 }
 
 // le roi suivi (ou null s'il est tombé : les troupes défendent alors en attendant le couronnement)
@@ -650,7 +683,7 @@ function aiDefense(team) {
     const wish = near >= 3 ? ['barricade', 'oil', 'towers'] : Math.random() < 0.12 ? ['tent', 'towers', 'barricade', 'oil'] : [];
     for (const key of wish) {
         const next = DEFENSES[key].levels[game.def[team][key] + 1];
-        if (next && game.gold[team] >= next.cost + 60) return buyDefense(team, key);
+        if (next && game.gold[team] >= next.cost + 60 && !game.defCd[team][key]) return buyDefense(team, key);
     }
     return false;
 }
@@ -730,6 +763,16 @@ function updateBot(b, dt) {
 }
 
 // ---------------------------------------------------------------- simulation
+// une étape du chemin est franchie quand on y est, quand on l'a dépassée dans le sens de la marche,
+// ou quand la foule nous empêche d'en approcher (sinon les troupes poussées restaient coincées pour toujours)
+function waypointReached(u, l) {
+    const w = PATH[u.wp];
+    if (!w) return false;
+    const f = u.z * dirOf(u.team);
+    const last = u.wp === PATH.length - 1;
+    return l < 0.3 || (f > w.f - 0.4 && l < (w.mode === 'lane' ? 12 : 3)) || (u.blocked > 1.2 && l < (last ? 3.2 : 2.5));
+}
+
 function step(dt) {
     syncBots();
     if (game.phase === 'playing') {
@@ -749,6 +792,7 @@ function step(dt) {
         const d = dirOf(u.team);
         const enemy = enemyOf(u.team);
         u.cd -= dt;
+        const px = u.x, pz = u.z;
 
         // 1. un ennemi à portée d'aggro ? Dans la cour, seul un roi ennemi entré dans le château compte ;
         //    dehors, on ne poursuit pas un roi à l'abri derrière des murs.
@@ -783,7 +827,7 @@ function step(dt) {
             if (Math.hypot(target.x - anchor[0], target.z - anchor[1]) > (king ? LEASH.follow : LEASH.defend)) target = null;
         }
 
-        let goal = null, ordered = false;
+        let goal = null, ordered = false, siegeAim = null;
         if (target) {
             const reach = s.range + (isKing ? 0.3 : isTent ? 0.2 : UNITS[target.type].radius * 0.6);
             if (best > reach) goal = [target.x, target.z];
@@ -831,6 +875,15 @@ function step(dt) {
                 if (thorns) damageUnit(u, thorns, enemy);
                 fx.push(u.type === 'ram' ? { k: 'fire', id: u.id } : { k: 'melee', id: u.id, p: [r2(u.x), 0.6, r2(u.z + (enemy === 'red' ? -0.7 : 0.7))] });
             }
+        } else if (u.type === 'catapult' && (siegeAim = siegeTarget(u, enemy, s.range))) {
+            // 3 bis. l'engin de siège pilonne d'abord les obstacles à portée : chapiteau, puis barricades
+            u.state = 2;
+            u.rot = Math.atan2(siegeAim.x - u.x, siegeAim.z - u.z);
+            if (u.cd <= 0 && game.phase === 'playing') {
+                u.cd = s.cd;
+                shoot('stone', [u.x, 2.4, u.z], [siegeAim.x, siegeAim.y, siegeAim.z], s.castleDmg, { def: siegeAim.key, team: enemy }, u.team);
+                fx.push({ k: 'fire', id: u.id });
+            }
         } else {
             // 4. assez près du château ennemi pour l'attaquer ?
             const gate = toWorld(enemy, 0, 0, 9);
@@ -861,27 +914,47 @@ function step(dt) {
         if (goal) {
             u.state = 0;
             const dx = goal[0] - u.x, dz = goal[1] - u.z, l = Math.hypot(dx, dz);
-            if (l < 0.3 && !target && !u.inside && !ordered) u.wp++;
+            if (!target && !u.inside && !ordered && waypointReached(u, l)) u.wp++;
             else if (l > 0) {
                 const m = Math.min(l, s.speed * dt);
                 u.x += dx / l * m; u.z += dz / l * m;
                 u.rot = Math.atan2(dx, dz);
             }
         }
+        u.walking = !!goal;
+        u.prev = [px, pz];
     }
 
-    // séparation légère pour que les unités ne s'empilent pas
-    for (let i = 0; i < units.length; i++) {
-        for (let j = i + 1; j < units.length; j++) {
-            const a = units[i], b = units[j];
-            const min = (UNITS[a.type].radius + UNITS[b.type].radius) * 0.8;
-            const dx = b.x - a.x, dz = b.z - a.z, dd = Math.hypot(dx, dz);
-            if (dd > 0.001 && dd < min) {
-                const push = (min - dd) * 0.5, nx = dx / dd, nz = dz / dd;
-                a.x -= nx * push; a.z -= nz * push;
-                b.x += nx * push; b.z += nz * push;
+    // séparation pour que les unités ne s'empilent pas : les petites s'écartent devant les grosses (engins de siège),
+    // et une troupe en marche glisse sur le côté de celle qui la gêne au lieu de la pousser de face
+    for (let pass = 0; pass < 2; pass++) {
+        for (let i = 0; i < units.length; i++) {
+            for (let j = i + 1; j < units.length; j++) {
+                const a = units[i], b = units[j];
+                const ra = UNITS[a.type].radius, rb = UNITS[b.type].radius;
+                const min = (ra + rb) * 0.9;
+                let dx = b.x - a.x, dz = b.z - a.z, dd = Math.hypot(dx, dz);
+                if (dd >= min) continue;
+                if (dd < 0.001) { const ang = (a.id * 7 + b.id) % 6.28; dx = Math.cos(ang) * 0.01; dz = Math.sin(ang) * 0.01; dd = 0.01; }
+                const nx = dx / dd, nz = dz / dd, over = min - dd;
+                const ma = ra * ra, mb = rb * rb;
+                const pa = over * mb / (ma + mb), pb = over * ma / (ma + mb);
+                a.x -= nx * pa; a.z -= nz * pa;
+                b.x += nx * pb; b.z += nz * pb;
+                // glissement latéral (même équipe, au moins l'une en marche)
+                if (a.team === b.team && (a.walking || b.walking)) {
+                    const side = ((a.id + b.id) & 1) ? 1 : -1, slide = over * 0.35;
+                    if (a.walking) { a.x -= nz * slide * side; a.z += nx * slide * side; }
+                    if (b.walking) { b.x += nz * slide * side; b.z -= nx * slide * side; }
+                }
             }
         }
+    }
+    // troupe qui veut avancer mais n'avance presque plus : elle est bloquée par la foule
+    for (const u of units) {
+        if (!u.prev) continue;
+        const moved = Math.hypot(u.x - u.prev[0], u.z - u.prev[1]);
+        u.blocked = u.walking && moved < UNITS[u.type].speed * dt * 0.3 ? (u.blocked || 0) + dt : 0;
     }
 
     for (const t of TEAMS) {
@@ -912,7 +985,7 @@ function step(dt) {
                         const target = targets[i % targets.length];
                         game.towerSide[t] *= -1;
                         const [tx, ty, tz] = TOWERS[t][game.towerSide[t] > 0 ? 1 : 0];
-                        shoot('arrow', toWorld(t, tx, ty, tz), [target.x, isKing ? target.y + 0.9 : 0.9, target.z], tw.dmg,
+                        shoot('arrow', toWorld(t, tx, ty, tz), [target.x, isKing ? target.y + 0.9 : 0.9, target.z], isKing ? tw.dmg * KING_ARMOR : tw.dmg,
                             isKing ? { player: target.id } : { unit: target.id }, t);
                     }
                 }
@@ -929,7 +1002,7 @@ function step(dt) {
                     const kingVictims = kings.filter(p => p.team !== t && inRange(p));
                     if (victims.length + kingVictims.length) {
                         for (const u of victims) damageUnit(u, oil.dmg, t);
-                        for (const p of kingVictims) damagePlayer(p, oil.dmg, t);
+                        for (const p of kingVictims) damagePlayer(p, oil.dmg * KING_ARMOR, t);
                         fx.push({ k: 'oil', team: t, p: [r2(c[0]), 0, r2(c[2])], r: oil.radius });
                         game.oilCd[t] = oil.cd;
                     } else game.oilCd[t] = 0.3;
@@ -967,6 +1040,7 @@ function step(dt) {
 
     // sorts : recharges et dragons
     for (const t of TEAMS) for (const k of MAGE_KEYS) game.spellCd[t][k] = Math.max(0, game.spellCd[t][k] - dt);
+    for (const t of TEAMS) for (const k of ['barricade', 'tent']) game.defCd[t][k] = Math.max(0, game.defCd[t][k] - dt);
     if (game.phase === 'playing') updateDragons(dt);
 
     // rois : recharge, couronnement après la mort, IA
@@ -1007,6 +1081,7 @@ function snapshot() {
         mg: TEAMS.map(t => MAGE_KEYS.map(k => (game.mage[t][k] ? 1 : 0))),
         sc: TEAMS.map(t => MAGE_KEYS.map(k => Math.ceil(game.spellCd[t][k]))),
         dr: game.dragons.map(dg => [dg.id, dg.team === 'red' ? 0 : 1, r2(dg.x), r2(dg.z), r2(dg.ry), dg.breath ? 1 : 0, dg.t <= 0 ? 1 : 0]),
+        dc: TEAMS.map(t => ['barricade', 'tent'].map(k => Math.ceil(game.defCd[t][k]))),
         dh: TEAMS.map(t => ['barricade', 'tent'].map(k => {
             const lv = DEFENSES[k].levels[game.def[t][k]];
             return lv ? Math.max(0, Math.round(game.defHp[t][k] / lv.hp * 100)) : 0;

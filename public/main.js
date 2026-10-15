@@ -301,6 +301,8 @@ function updatePlayer(dt) {
         ui.crownTime.textContent = Math.ceil(deadTimer);
         return;
     }
+    // filet de sécurité : si un « blur » nous a échappé, pas de déplacement sans le focus
+    if (!document.hasFocus() && Object.values(keys).some(Boolean)) releaseAll();
     let ix = 0, iz = 0;
     if (keys.KeyW || keys.ArrowUp) iz += 1;
     if (keys.KeyS || keys.ArrowDown) iz -= 1;
@@ -383,7 +385,19 @@ window.addEventListener('keydown', e => {
     if (di >= 0 && DEF_KEYS[di]) send({ t: 'defense', key: DEF_KEYS[di] });
 });
 window.addEventListener('keyup', e => { keys[e.code] = false; });
-window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
+// la fenêtre perd le focus (clic ailleurs, alt-tab, onglet caché) : le relâchement des touches ne nous
+// parviendra jamais, on oublie donc tout ce qui était enfoncé (sinon le roi continue d'avancer tout seul)
+function releaseAll() {
+    for (const k in keys) keys[k] = false;
+    jumpRequest = false;
+    dragging = false;
+    touchPts.clear();
+    touchJoy.active = false; touchJoy.x = touchJoy.y = 0;
+}
+window.addEventListener('blur', releaseAll);
+window.addEventListener('focus', releaseAll);
+document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAll(); });
+document.addEventListener('mouseleave', () => { dragging = false; });
 
 let yaw = Math.PI, pitch = 0.32, camDistWanted = 9, camDist = 9;
 let dragging = false, lastX = 0, lastY = 0, dragDist = 0;
@@ -1629,7 +1643,7 @@ const DEF_HELP = {
     towers: "Tours de garde : flèches plus fortes, plus rapides et plus lointaines. Au niveau 3, les deux tours tirent ensemble.",
     oil: "Huile bouillante : un chaudron au-dessus de la porte arrose régulièrement les ennemis massés devant le pont-levis.",
     barricade: "Barricades : elles se placent devant le pont-levis. Soldats, chevaliers et roi ennemis doivent les abattre pour passer. Niveau 2 : chevaux de frise qui piquent ceux qui les frappent.",
-    tent: "Chapiteau : une caserne hors les murs. Tes soldats, archers et chevaliers peuvent y être formés et partent sans passer par le pont-levis. Mais l'ennemi peut l'abattre !",
+    tent: "Chapiteau : une caserne hors les murs. Tes soldats, archers et chevaliers peuvent y être formés et partent sans passer par le pont-levis. Mais l'ennemi peut l'abattre (les engins de siège le pilonnent de loin), et il faut alors attendre 40 s pour le relever !",
 };
 
 function updateHud(s, kingHp) {
@@ -1660,11 +1674,12 @@ function updateHud(s, kingHp) {
         const shown = key === 'towers' ? lv + 1 : lv;            // les tours démarrent au niveau 1
         b.querySelector('.lvl').textContent = key === 'tent' ? (lv ? 'dressé' : '') : `Nv ${shown}/${key === 'towers' ? max + 1 : max}`;
         b.querySelector('.lvl').classList.toggle('show', key !== 'tent' || lv > 0);
-        b.querySelector('.cost').textContent = next ? `🪙 ${next.cost}` : (key === 'tent' ? '✔ dressé' : '✔ max');
         const hpI = ['barricade', 'tent'].indexOf(key);
+        const rebuild = hpI >= 0 && s.dc ? s.dc[myI][hpI] : 0;    // abattue : délai avant de pouvoir la relever
+        b.querySelector('.cost').textContent = rebuild ? `⏳ ${rebuild} s` : next ? `🪙 ${next.cost}` : (key === 'tent' ? '✔ dressé' : '✔ max');
         b.querySelector('.prog i').style.width = (hpI >= 0 && lv ? s.dh[myI][hpI] : 0) + '%';
         b.classList.toggle('built', !next);
-        b.disabled = phase !== 'playing' || !next || myGold < next.cost;
+        b.disabled = phase !== 'playing' || !next || myGold < next.cost || rebuild > 0;
     }
     myKingHpPct = kingHp;
     let anyBuilt = false;
