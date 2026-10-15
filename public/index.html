@@ -66,6 +66,12 @@
         .unitBtn .ico { font-size: 26px; line-height: 1.1; }
         .unitBtn .nm { font-weight: 700; font-size: 13px; line-height: 1.05; text-align: center; }
         .unitBtn .cost { font-size: 13px; }
+        .unitBtn .vs { display: flex; gap: 3px; justify-content: center; font-size: 12px; line-height: 1; margin: 2px 0 1px; min-height: 16px; }
+        .unitBtn .vs b, .unitBtn .vs i {
+            font-style: normal; font-weight: 400; padding: 2px 3px 1px; border-radius: 8px; white-space: nowrap; letter-spacing: -1px;
+        }
+        .unitBtn .vs b { background: #cdeec0; box-shadow: inset 0 0 0 1.5px #3fae49; }   /* bat */
+        .unitBtn .vs i { background: #f6cccc; box-shadow: inset 0 0 0 1.5px #d7262e; }   /* craint */
         /* défenses : séparées des troupes, niveau en pastille */
         .shopSep { width: 3px; align-self: stretch; margin: 2px 2px; border-radius: 2px; background: #d8c6a6; }
         .defBtn { background: #f3ead8; }
@@ -76,10 +82,13 @@
         .defBtn .lvl.show { display: block; }
         .defBtn.built { opacity: 1 !important; background: #e3f2d6; }
         .defBtn .prog i { background: #3fae49; }
-        @media (max-width: 1250px) {
+        /* écrans moyens : boutons plus compacts, et la boutique se centre dans l'espace laissé par la mini-carte */
+        @media (max-width: 1500px) {
             .unitBtn { width: 70px; }
             .unitBtn .nm { font-size: 11.5px; }
             .unitBtn .ico { font-size: 22px; }
+            #shop { left: calc((100% - 162px) / 2); gap: 10px; }
+            #gold { font-size: 22px; min-width: 80px; }
         }
         /* file de formation : nombre en attente + avancement */
         .unitBtn .queued {
@@ -112,8 +121,114 @@
             border: 4px solid #3a2a1a; border-radius: 16px; box-shadow: 0 5px 0 #3a2a1a;
         }
 
-        /* grimoire : sorts des tours de mage (en bas à gauche) */
-        #spells { position: fixed; left: 16px; top: 16px; padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; }
+
+        /* ---------------------------------------------------------------- écran de fin : statistiques */
+        #overStats { margin: 10px auto 12px; border-collapse: collapse; font-size: 15px; min-width: 330px; }
+        #overStats th { font-size: 14px; padding: 2px 10px; }
+        #overStats th.me { color: var(--team); }
+        #overStats td { padding: 3px 10px; border-top: 1px dashed #e0d2b8; }
+        #overStats td:first-child { text-align: left; font-weight: 600; }
+        #overStats td.v { font-weight: 800; font-variant-numeric: tabular-nums; }
+        #overStats td.best { color: #2b8a3a; }
+        #overDuration { font-size: 14px; font-weight: 700; opacity: .7; }
+
+        /* ---------------------------------------------------------------- cris rapides */
+        #shoutMenu {
+            position: fixed; top: 68px; right: 16px; display: none; flex-direction: column; gap: 5px; padding: 8px; z-index: 6;
+            border-color: #3a2a1a; box-shadow: 0 5px 0 #3a2a1a;
+        }
+        #shoutMenu.show { display: flex; }
+        #shoutMenu button {
+            font-family: inherit; font-weight: 700; font-size: 15px; text-align: left; cursor: pointer; color: #3a2a1a;
+            background: #fff3dc; border: 2px solid #3a2a1a; border-radius: 10px; padding: 3px 10px;
+        }
+        #shoutMenu button:hover { background: #fff; }
+        #bubbles { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+        .bubble {
+            position: absolute; transform: translate(-50%, -100%); white-space: nowrap; font-weight: 800; font-size: 16px;
+            background: #fffaf2; color: #3a2a1a; border: 3px solid var(--bc, #3a2a1a); border-radius: 14px; padding: 3px 10px;
+            box-shadow: 0 3px 0 rgba(58, 42, 26, .35); animation: bubbleIn .25s cubic-bezier(.3, 1.6, .5, 1);
+        }
+        .bubble::after {
+            content: ''; position: absolute; left: 50%; bottom: -9px; transform: translateX(-50%);
+            border: 6px solid transparent; border-top-color: var(--bc, #3a2a1a);
+        }
+        @keyframes bubbleIn { from { transform: translate(-50%, -100%) scale(.4); opacity: 0; } }
+
+        /* ---------------------------------------------------------------- commandes tactiles (tablettes) */
+        #touchUI { display: none; }
+        body.touch:not(.menu) #touchUI { display: block; }
+        #joy {
+            position: fixed; left: 28px; bottom: 150px; width: 124px; height: 124px; border-radius: 50%; touch-action: none;
+            background: rgba(255, 250, 242, .55); border: 4px solid rgba(58, 42, 26, .6);
+        }
+        #joyKnob {
+            position: absolute; left: 50%; top: 50%; width: 56px; height: 56px; margin: -28px 0 0 -28px; border-radius: 50%;
+            background: var(--team); border: 4px solid #3a2a1a; box-shadow: 0 3px 0 #3a2a1a;
+        }
+        #touchBtns { position: fixed; right: 20px; bottom: 270px; display: grid; grid-template-columns: repeat(2, 66px); gap: 10px; }
+        #touchBtns button {
+            width: 66px; height: 66px; border-radius: 50%; font-size: 28px; touch-action: none; cursor: pointer;
+            background: #fffaf2; border: 4px solid #3a2a1a; box-shadow: 0 4px 0 #3a2a1a;
+        }
+        #touchBtns button.active { background: var(--team); }
+        #touchBtns button[data-t="attack"] { background: #ffe1a8; }
+
+        /* ---------------------------------------------------------------- partie guidée */
+        .tutoTile {
+            display: flex; align-items: center; gap: 12px; width: 100%; box-sizing: border-box; text-align: left; cursor: pointer;
+            font-family: inherit; color: #3a2a1a; background: #fff3dc; border: 4px solid #3a2a1a; border-radius: 20px;
+            box-shadow: 0 6px 0 #3a2a1a; padding: 10px 16px; font-size: 16px; transition: transform .12s;
+        }
+        .tutoTile:hover { transform: translateY(-3px); }
+        .tutoTile .ttIco { font-size: 34px; }
+        .tutoTile b { font-size: 20px; display: block; }
+        .tutoTile.suggest { animation: suggest 1.6s ease-in-out infinite; }
+        @keyframes suggest { 50% { box-shadow: 0 6px 0 #3a2a1a, 0 0 0 6px rgba(246, 194, 26, .55); } }
+        #tuto {
+            position: fixed; top: 68px; right: 16px; width: 330px; display: none; padding: 12px 14px; z-index: 5;
+            border-color: #f6c21a; box-shadow: 0 6px 0 #c99a00;
+        }
+        #tuto.show { display: block; animation: viewIn .35s cubic-bezier(.3, 1.4, .5, 1); }
+        #tutoStep { font-size: 13px; font-weight: 800; opacity: .6; }
+        #tutoText { font-size: 15.5px; line-height: 1.4; margin: 4px 0 8px; }
+        .tutoFoot { display: flex; align-items: center; gap: 8px; }
+        #tutoDots { flex: 1; letter-spacing: 2px; font-size: 12px; }
+        #tutoSkip { font-family: inherit; font-weight: 700; font-size: 13px; background: none; border: none; cursor: pointer; opacity: .6; text-decoration: underline; }
+        .tutoHi { outline: 4px solid #f6c21a !important; outline-offset: 3px; animation: tutoHi 1s ease-in-out infinite; }
+        @keyframes tutoHi { 50% { outline-color: rgba(246, 194, 26, .25); } }
+
+        /* réglages du son, en haut à droite (aussi dans le menu) */
+        #soundCtl { position: fixed; top: 16px; right: 16px; display: flex; gap: 8px; z-index: 6; }
+        #soundCtl button {
+            width: 42px; height: 42px; border-radius: 50%; font-size: 20px; cursor: pointer; padding: 0;
+            background: #fffaf2; border: 3px solid #3a2a1a; box-shadow: 0 4px 0 #3a2a1a;
+        }
+        #soundCtl button:active { transform: translateY(3px); box-shadow: 0 1px 0 #3a2a1a; }
+        #soundCtl button.off { opacity: .5; background: #e9e2d4; }
+        #musicBtn.off { text-decoration: line-through; }
+        /* grimoire : sorts des tours de mage (en haut à gauche) */
+        #leftCol { position: fixed; left: 16px; top: 16px; display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+        #spells { padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; }
+        /* ordres aux troupes */
+        #orders { padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+        #orderBtns { display: flex; gap: 6px; }
+        .orderBtn {
+            position: relative; width: 78px; padding: 5px 2px 4px; cursor: pointer; font-family: inherit; color: #3a2a1a;
+            display: flex; flex-direction: column; align-items: center; border: 3px solid #3a2a1a; border-radius: 14px;
+            background: #fff3dc; box-shadow: 0 4px 0 #3a2a1a; transition: transform .08s;
+        }
+        .orderBtn:hover { transform: translateY(-2px); }
+        .orderBtn:active { transform: translateY(3px); box-shadow: 0 1px 0 #3a2a1a; }
+        .orderBtn .oico { font-size: 22px; line-height: 1.1; }
+        .orderBtn .oname { font-weight: 800; font-size: 11.5px; line-height: 1.05; text-align: center; }
+        .orderBtn .okey {
+            position: absolute; top: -9px; left: -9px; width: 22px; height: 22px; border-radius: 50%;
+            background: #3a2a1a; color: #fff; font-weight: 800; font-size: 12px; line-height: 22px;
+        }
+        .orderBtn.active { background: var(--team); color: #fff; transform: translateY(-2px); }
+        .orderBtn.active .okey { background: #f6c21a; color: #3a2a1a; }
+        .orderHint { font-size: 12px; font-weight: 600; opacity: .75; max-width: 250px; }
         .spellsTitle { font-weight: 800; font-size: 14px; }
         #spellBtns { display: flex; gap: 8px; }
         .spellBtn {
@@ -127,8 +242,32 @@
         }
         .spellBtn:hover:not(:disabled) { transform: translateY(-2px); }
         .spellBtn:disabled { cursor: not-allowed; }
-        .spellBtn:disabled .sico { filter: grayscale(.6); opacity: .6; }
         .spellBtn.locked { background: #e9e2d4; border-style: dashed; }
+        .spellBtn.locked .sico { filter: grayscale(.85); opacity: .55; }
+        .spellBtn .slock { display: none; position: absolute; top: 4px; right: 5px; font-size: 13px; }
+        .spellBtn.locked .slock { display: block; }
+        .spellBtn.ready { animation: spellReady 1.6s ease-in-out infinite; }
+        @keyframes spellReady {
+            0%, 100% { box-shadow: 0 4px 0 #3a2a1a, 0 0 0 0 rgba(155, 92, 230, .0); }
+            50% { box-shadow: 0 4px 0 #3a2a1a, 0 0 0 5px rgba(155, 92, 230, .45); }
+        }
+        .spellBtn .saction { font-size: 11.5px; font-weight: 800; margin-top: 2px; white-space: nowrap; }
+        .spellBtn.ready .saction { color: #6b3fa0; }
+        .spellBtn.poor .saction, .spellBtn.lockedPoor .saction { color: #c41e2a; }
+        .spellBtn.full .saction, .spellBtn.cooling .saction { color: #6b5a48; }
+        .spellBtn.cooling .sico, .spellBtn.full .sico, .spellBtn.poor .sico { filter: grayscale(.5); opacity: .7; }
+        .spellHint { font-size: 12.5px; font-weight: 600; opacity: .75; max-width: 250px; }
+        /* fiche du sort survolé */
+        .spellInfo {
+            display: none; margin-top: 4px; max-width: 258px; font-size: 13px; line-height: 1.35;
+            background: #fff8ea; border: 2px solid #d8c6a6; border-radius: 12px; padding: 8px 10px;
+        }
+        .spellInfo.show { display: block; }
+        .spellInfo .siHead { font-size: 15px; margin-bottom: 3px; }
+        .spellInfo .siHead span { display: block; font-size: 11.5px; font-weight: 700; opacity: .6; }
+        .spellInfo .siStats { margin-top: 4px; font-size: 12px; font-weight: 700; opacity: .75; }
+        .spellInfo .siNext { margin-top: 5px; padding-top: 5px; border-top: 1px dashed #d8c6a6; color: #a3171d; font-weight: 600; }
+        .spellInfo .siNext.ok { color: #6b3fa0; }
         .spellBtn.aiming { background: #ffd6a0; box-shadow: 0 0 0 4px #ff7a1a, 0 4px 0 #3a2a1a; }
         .spellBtn .skey {
             position: absolute; top: -9px; left: -9px; width: 22px; height: 22px; border-radius: 50%;
@@ -136,7 +275,6 @@
         }
         .spellBtn .sico { font-size: 26px; line-height: 1.1; }
         .spellBtn .sname { font-weight: 700; font-size: 12px; line-height: 1.05; text-align: center; }
-        .spellBtn .scost { font-size: 12.5px; }
         .spellBtn .scd {
             position: absolute; top: 14px; left: 0; right: 0; text-align: center; z-index: 1;
             font-weight: 800; font-size: 22px; color: #fff; text-shadow: 0 2px 0 #3a2a1a;
@@ -198,7 +336,7 @@
 
         /* ---------------------------------------------------------------- menu de démarrage */
         body.menu #bars, body.menu #shop, body.menu #minimap,
-        body.menu #lobby, body.menu #prompt, body.menu #crownMsg, body.menu #spells, body.menu #aimMsg { display: none !important; }
+        body.menu #lobby, body.menu #prompt, body.menu #crownMsg, body.menu #leftCol, body.menu #aimMsg, body.menu #shoutBtn, body.menu #shoutMenu, body.menu #tuto { display: none !important; }
         #menu {
             position: fixed; inset: 0; display: none; overflow-y: auto;
             background: radial-gradient(ellipse at 50% 30%, rgba(246, 231, 210, .3), rgba(246, 231, 210, .9) 75%);
@@ -462,11 +600,46 @@
     <canvas id="minimap" width="130" height="230"></canvas>
 
     <div id="prompt" class="panel"><span class="ok">Appuie sur <b>E</b> pour <span id="promptText">lever le pont-levis</span></span><span class="ko">⛓️ Les chaînes de ton pont-levis ont cassé : il ne peut plus se relever !</span></div>
-    <div id="spells" class="panel">
-        <div class="spellsTitle">🔮 Grimoire des mages</div>
-        <div id="spellBtns"></div>
+    <div id="soundCtl">
+        <button id="sfxBtn" title="Couper les bruitages">🔊</button>
+        <button id="musicBtn" title="Couper la musique">🎵</button>
+        <button id="shoutBtn" title="Cris rapides">📣</button>
     </div>
-    <div id="aimMsg" class="panel">☄️ Clique sur le champ de bataille pour lancer la boule de feu <small>(clic droit ou Échap pour annuler)</small></div>
+    <div id="shoutMenu" class="panel"></div>
+    <div id="bubbles"></div>
+    <div id="tuto" class="panel">
+        <div id="tutoStep"></div>
+        <div id="tutoText"></div>
+        <div class="tutoFoot"><span id="tutoDots"></span><button id="tutoSkip">Passer le tutoriel</button><button id="tutoNext" class="smallBtn">C'est parti !</button></div>
+    </div>
+    <div id="touchUI">
+        <div id="joy"><div id="joyKnob"></div></div>
+        <div id="touchBtns">
+            <button data-t="jump" title="Sauter">⤒</button>
+            <button data-t="attack" title="Frapper">⚔️</button>
+            <button data-t="run" title="Courir">🏃</button>
+            <button data-t="door" title="Pont-levis">⛓️</button>
+        </div>
+    </div>
+    <div id="leftCol">
+        <div id="spells" class="panel">
+            <div class="spellsTitle">🔮 Grimoire des mages</div>
+            <div id="spellHint" class="spellHint">Bâtis une tour de mage (derrière ton château) pour apprendre ton premier sort.</div>
+            <div id="spellBtns"></div>
+            <div id="spellInfo" class="spellInfo"></div>
+        </div>
+        <div id="orders" class="panel">
+            <div class="spellsTitle">🚩 Ordres aux troupes</div>
+            <div id="orderBtns">
+                <button class="orderBtn active" data-order="attack" title="Tes troupes marchent sur le château ennemi."><span class="okey">V</span><span class="oico">⚔️</span><span class="oname">Attaquer</span></button>
+                <button class="orderBtn" data-order="defend" title="Tes troupes se postent devant ton pont-levis et ne s'en éloignent pas."><span class="okey">B</span><span class="oico">🛡️</span><span class="oname">Défendre</span></button>
+                <button class="orderBtn" data-order="follow" title="Tes troupes escortent ton roi, même jusque dans le château ennemi."><span class="okey">N</span><span class="oico">👑</span><span class="oname">Suivre le roi</span></button>
+            </div>
+            <div id="orderHint" class="orderHint">Tes troupes marchent sur le château ennemi.</div>
+        </div>
+    </div>
+    <div id="aimMsg" class="panel">☄️ Clique sur le champ de bataille pour lancer la boule de feu (<span id="aimCost">90</span> 🪙)
+        <small>· clic droit, Échap ou T pour annuler</small></div>
     <div id="crownMsg" class="panel">Le roi est tombé… Vive le roi !<br>Nouveau couronnement dans <span id="crownTime">5</span></div>
     <div id="toast" class="panel"></div>
 
@@ -479,6 +652,8 @@
     <div id="over" class="panel">
         <div id="overTitle">Victoire !</div>
         <div id="overText"></div>
+        <table id="overStats"></table>
+        <div id="overDuration"></div>
         <button id="again" class="bigBtn">Rejouer</button>
         <button id="overMenu" class="bigBtn">Menu</button>
     </div>
@@ -510,26 +685,38 @@
                         <span class="tileSub">Ouvre un salon et convie un ami à la bataille</span>
                     </button>
                 </div>
+                <button class="tutoTile" id="tutoBtn">
+                    <span class="ttIco">📖</span>
+                    <span><b>Partie guidée</b>Nouveau sur le tapis ? Apprends à régner pas à pas, l'Écuyer d'en face t'attendra.</span>
+                </button>
                 <small class="note" id="homeNote"></small>
                 <details class="rules panel">
                     <summary>📜 Le Grand Parchemin des règles</summary>
                     <p class="oyez">Oyez, oyez, jeunes seigneurs ! Voici les lois du royaume du tapis :</p>
                     <ul>
                         <li><b>🛡️ Lève ton armée.</b> Dans ta caserne, entraîne soldats, archers et chevaliers. Dans ton atelier,
-                            fais bâtir canons et catapultes (touches <b>1</b> à <b>5</b>). Tes soldats quittent le château par le pont-levis.</li>
+                            fais bâtir canons, catapultes et béliers (touches <b>1</b> à <b>6</b>). Tes soldats quittent le château par le pont-levis.</li>
+                        <li><b>⚔️ Chaque troupe a son ennemi juré.</b> Les lances des soldats transpercent les chevaliers, les chevaliers
+                            taillent les archers en pièces, et les flèches des archers criblent les soldats. Le 🐏 bélier défonce le pont-levis
+                            (même levé) et les barricades, mais tremble devant les lances : protège-le !</li>
                         <li><b>🪙 Remplis ton coffre.</b> Ton royaume te verse de l'or chaque seconde, et chaque soldat ennemi vaincu
                             te rapporte la moitié de ce qu'il a coûté à son roi. Dépense-le avec sagesse !</li>
                         <li><b>👑 Le roi aussi se bat.</b> Ton roi brandit son arme (<b>F</b> ou clic). S'il tombe, pas de panique :
                             un nouveau roi est couronné dans ta cour 5 secondes plus tard.</li>
                         <li><b>⛓️ Le pont-levis.</b> Lève-le (<b>E</b>) pour mettre ton trésor à l'abri… mais tes soldats
                             resteront enfermés derrière !</li>
-                        <li><b>🏰 Les défenses.</b> Avec ton or (touches <b>6</b> à <b>9</b>), renforce tes tours 🏹, fais chauffer
+                        <li><b>🏰 Les défenses.</b> Avec ton or (touches <b>7</b>, <b>8</b>, <b>9</b> et <b>0</b>), renforce tes tours 🏹, fais chauffer
                             de l'huile au-dessus de la porte 🔥, dresse des barricades devant le pont-levis 🪵, ou plante un chapiteau 🎪
                             hors les murs : tes soldats y sont formés et partent sans ouvrir le pont-levis. Mais gare, l'ennemi peut l'abattre !</li>
+                        <li><b>📣 Les cris.</b> Le bouton 📣 (en haut à droite) fait crier ton roi : « Oyez, oyez ! », « À l'attaque ! »,
+                            « Bien joué ! »… Tout le monde voit la bulle au-dessus de sa tête.</li>
+                        <li><b>🚩 Les ordres.</b> Commande toute ton armée d'un geste : ⚔️ <b>Attaquer</b> (touche <b>V</b>),
+                            🛡️ <b>Défendre</b> devant ton pont-levis (<b>B</b>) ou 👑 <b>Suivre le roi</b> (<b>N</b>), pour qu'elle t'escorte
+                            jusqu'au trésor ennemi !</li>
                         <li><b>🔮 Les tours de mage.</b> Bâties derrière ton château, nul ne peut les abattre. Chacune t'apprend un sort,
                             payé en or à chaque lancer (touches <b>R</b>, <b>T</b>, <b>Y</b>) : 🧪 la potion de vie soigne ton roi,
                             ☄️ la boule de feu s'abat où tu vises, et 🐉 la plus précieuse invoque le dragon de ton royaume, qui réduit en cendres
-                            toutes les troupes ennemies qu'il survole (mais ne touche pas aux constructions, et ne rapporte pas d'or) !</li>
+                            toutes les troupes ennemies qu'il survole hors de leur château (mais ne touche pas aux constructions, et ne rapporte pas d'or) !</li>
                         <li><b>🏆 La victoire.</b> Quand un château n'a plus de points de vie, ses chaînes cassent et son pont-levis
                             reste baissé pour toujours. Le premier roi qui entre dans la salle au trésor d'en face remporte la couronne !</li>
                     </ul>

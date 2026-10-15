@@ -45,7 +45,17 @@ const UNITS = {
     knight:   { name: 'Chevalier',      icon: '🛡️', cost: 70,  bounty: 35,  train: 6,  building: 'barracks', hp: 220, speed: 2.0, dmg: 20, castleDmg: 10, range: 1.4, cd: 1.1, aggro: 7, targetsUnits: true,  radius: 0.45 },
     cannon:   { name: 'Canon',          icon: '💣', cost: 150, bounty: 75,  train: 9,  building: 'workshop', hp: 240, speed: 1.2, dmg: 0,  castleDmg: 55, range: 14,  cd: 3.5, aggro: 0, targetsUnits: false, radius: 1.0, ranged: 'ball' },
     catapult: { name: 'Engin de siège', icon: '🪨', cost: 200, bounty: 100, train: 10, building: 'workshop', hp: 180, speed: 1.1, dmg: 0,  castleDmg: 70, range: 30,  cd: 5.0, aggro: 0, targetsUnits: false, radius: 1.1, ranged: 'stone' },
+    // le bélier fonce sur le pont-levis et frappe fort, même pont levé ; il ne se défend pas et craint les lances
+    ram:      { name: 'Bélier',         icon: '🐏', cost: 160, bounty: 80,  train: 8,  building: 'workshop', hp: 260, speed: 1.5, dmg: 0,  castleDmg: 90, range: 1.6, cd: 2.8, aggro: 0, targetsUnits: false, radius: 1.0 },
 };
+// forces et faiblesses (multiplicateur des dégâts infligés) : les lances battent les chevaliers (et le bélier),
+// les chevaliers battent les archers, les archers battent les soldats
+const COUNTERS = {
+    infantry: { knight: 2.5, ram: 3 },
+    knight:   { archer: 2, infantry: 0.7 },
+    archer:   { infantry: 2, knight: 0.6 },
+};
+const counter = (att, def) => COUNTERS[att]?.[def] ?? 1;
 const TYPES = Object.keys(UNITS);
 const TEAMS = ['red', 'blue'];
 const BUILDING_NAMES = ['barracks', 'workshop', 'tent'];
@@ -84,7 +94,7 @@ const GATE_FRONT_Z = 7.8;      // au-delà, on est dehors, devant la façade
 const MAGES = {
     potion:   { tower: "Tour de l'Alchimiste", spell: 'Potion de vie', icon: '🧪', key: 'R', build: 250, cost: 60,  cd: 30,  heal: 150, pos: [-6, -15.5] },
     fireball: { tower: 'Tour du Pyromancien',  spell: 'Boule de feu',  icon: '☄️', key: 'T', build: 350, cost: 90,  cd: 14,  radius: 3.5, dmg: 90, structDmg: 150, pos: [6, -15.5] },
-    dragon:   { tower: "Tour de l'Invocateur", spell: 'Dragon',        icon: '🐉', key: 'Y', build: 800, cost: 300, cd: 100, duration: 18, radius: 3.6, speed: 8, pos: [0, -17.5] },
+    dragon:   { tower: "Tour de l'Invocateur", spell: 'Dragon',        icon: '🐉', key: 'Y', build: 1200, cost: 500, cd: 300, duration: 18, radius: 3.6, speed: 8, pos: [0, -17.5] },
 };
 const MAGE_KEYS = Object.keys(MAGES);
 const MAGE_TOP = 11.5;         // hauteur d'où partent les sorts (balcon des tours de mage)
@@ -147,6 +157,15 @@ let players = new Map();
 let nextPlayerId = 1;
 let game;
 
+function newStats() {
+    return { trained: 0, killed: 0, lost: 0, earned: 0, castleDmg: 0, spells: 0, built: 0, kingsFallen: 0 };
+}
+// tout l'or gagné passe par ici (revenu, primes) pour être compté
+function earn(team, amount) {
+    game.gold[team] += amount;
+    game.stats[team].earned += amount;
+}
+
 function newGame(phase = 'waiting') {
     game = {
         phase,                                   // waiting | playing | over
@@ -165,12 +184,17 @@ function newGame(phase = 'waiting') {
         def: { red: { towers: 0, oil: 0, barricade: 0, tent: 0 }, blue: { towers: 0, oil: 0, barricade: 0, tent: 0 } },
         defHp: { red: { barricade: 0, tent: 0 }, blue: { barricade: 0, tent: 0 } },
         oilCd: { red: 0, blue: 0 },
+        orders: { red: { mode: 'attack', king: null }, blue: { mode: 'attack', king: null } },
         mage: { red: { potion: false, fireball: false, dragon: false }, blue: { potion: false, fireball: false, dragon: false } },
         spellCd: { red: { potion: 0, fireball: 0, dragon: 0 }, blue: { potion: 0, fireball: 0, dragon: 0 } },
         dragons: [],
         units: [],
         pending: [],                             // projectiles en vol
         nextUnitId: 1,
+        startedAt: Date.now(),
+        peace: false,                            // partie guidée : l'IA attend la fin de la leçon
+        // statistiques affichées à la fin : par royaume
+        stats: { red: newStats(), blue: newStats() },
     };
 }
 let fx = [];
@@ -227,6 +251,7 @@ function spawnUnit(team, type, building) {
     const [bx, bz] = out ? TENT.door : BUILDINGS[building];
     const [x, , z] = toWorld(team, bx + rnd(-0.4, 0.4), 0, bz + rnd(-0.2, 0.2));
     const s = UNITS[type];
+    game.stats[team].trained++;
     game.units.push({
         id: game.nextUnitId++, type, team, x, z,
         hp: s.hp, wp: 0, inside: out ? 0 : 2, mz: rnd(-1.4, 0.4), cd: rnd(0, 0.5), state: 0, rot: dirOf(team) > 0 ? 0 : Math.PI,
@@ -255,6 +280,7 @@ function damageUnit(u, dmg, byTeam) {
 // à 0 PV, le château ne tombe pas : son pont-levis lâche et reste baissé pour de bon
 function damageCastle(team, dmg) {
     if (game.phase !== 'playing' || game.broken[team]) return;
+    game.stats[enemyOf(team)].castleDmg += Math.min(dmg, game.hp[team]);
     game.hp[team] = Math.max(0, game.hp[team] - dmg);
     if (game.hp[team] <= 0) {
         game.broken[team] = true;
@@ -281,6 +307,7 @@ function buyDefense(team, key) {
     if (!next || game.gold[team] < next.cost) return false;
     game.gold[team] -= next.cost;
     game.def[team][key]++;
+    game.stats[team].built++;
     if (next.hp) game.defHp[team][key] = next.hp;          // construit ou renforcé : remis à neuf
     broadcast({ t: 'msg', text: DEF_MSG[key](whoOf(team), game.def[team][key]) });
     return true;
@@ -293,7 +320,7 @@ function damageDefense(team, key, dmg, byTeam) {
     if (game.defHp[team][key] > 0) return;
     game.def[team][key] = 0;
     game.defHp[team][key] = 0;
-    game.gold[byTeam] += STRUCTURE_BOUNTY[key];
+    earn(byTeam, STRUCTURE_BOUNTY[key]);
     if (key === 'tent') {                                   // les recrues du chapiteau rentrent à la caserne
         game.queue[team].barracks.push(...game.queue[team].tent);
         game.queue[team].barracks.splice(QUEUE_MAX + 2);
@@ -309,12 +336,95 @@ function nearBarricade(team, x, z, margin = 1.0) {
     return Math.abs(lx) < BARRICADE.half + 1 && lz > BARRICADE.z - 0.8 && lz < BARRICADE.z + margin;
 }
 
+// ---------------------------------------------------------------- cris rapides
+// les textes sont côté client (index du cri) ; une bulle s'affiche au-dessus du roi qui crie
+const SHOUT_COUNT = 6;
+function shout(p, i) {
+    if (!Number.isInteger(i) || i < 0 || i >= SHOUT_COUNT || p.dead) return;
+    const now = Date.now();
+    if (now - (p.lastShout || 0) < 1500) return;              // pas de concert de trompettes
+    p.lastShout = now;
+    broadcast({ t: 'shout', pid: p.id, i });
+}
+
+// ---------------------------------------------------------------- ordres aux troupes
+// attack : marcher sur le château ennemi (comportement de base) ; defend : se poster devant son pont-levis ;
+// follow : escorter un roi (en passant par les portes des châteaux, jamais à travers les murs)
+const ORDERS = ['attack', 'defend', 'follow'];
+const DEFEND_Z = 18, LEASH = { defend: 13, follow: 11 };
+const ORDER_TEXT = {
+    attack: '⚔️ À l\'attaque ! Les troupes marchent sur le château ennemi.',
+    defend: '🛡️ Défendez le château ! Les troupes se postent devant le pont-levis.',
+    follow: '👑 Suivez le roi ! Les troupes escortent leur souverain.',
+};
+
+function setOrder(team, mode, kingId) {
+    if (!ORDERS.includes(mode)) return;
+    const o = game.orders[team];
+    if (o.mode === mode && o.king === kingId) return;
+    game.orders[team] = { mode, king: mode === 'follow' ? kingId : null };
+    for (const p of players.values()) if (p.team === team) send(p.ws, { t: 'order', mode, text: ORDER_TEXT[mode] });
+}
+
+// le roi suivi (ou null s'il est tombé : les troupes défendent alors en attendant le couronnement)
+function orderKing(team) {
+    const o = game.orders[team];
+    if (o.mode !== 'follow') return null;
+    const k = players.get(o.king);
+    return k && !k.dead && k.team === team ? k : null;
+}
+
+// point où une troupe doit se rendre selon l'ordre de son camp (null : elle y est déjà)
+function orderGoal(u, s) {
+    const team = u.team, king = orderKing(team);
+    let gx, gz;
+    if (!king) {
+        // défense : une ligne devant son pont-levis (derrière ses barricades), archers et engins un peu en retrait
+        const lx = Math.max(-6.5, Math.min(6.5, u.lane * 0.7));
+        [gx, , gz] = toWorld(team, lx, 0, (s.ranged ? DEFEND_Z - 2 : DEFEND_Z) + u.nx * 0.8);
+    } else {
+        // escorte : chacun sa place autour du roi
+        const a = u.id * 2.39996, r = 1.7 + (u.id % 4) * 0.75;
+        gx = king.x + Math.sin(a) * r; gz = king.z + Math.cos(a) * r;
+        for (const t of TEAMS) {
+            const passable = t === team ? game.door[t] : game.door[t] || game.broken[t];
+            const [lx, lz] = toLocal(t, u.x, u.z);
+            const unitIn = isInCastle(t, u.x, u.z), kingIn = isInCastle(t, king.x, king.z);
+            if (unitIn && !kingIn) {
+                // sortir d'abord par la porte
+                [gx, , gz] = toWorld(t, u.nx, 0, Math.abs(lx) > 1.6 || lz < 4 ? 4.5 : 10.5);
+                break;
+            }
+            if (!unitIn && kingIn) {
+                // entrer par la porte (si elle est ouverte), sinon attendre devant
+                const atGate = Math.abs(lx) < 1.6 && lz > 7 && lz < 11;
+                [gx, , gz] = toWorld(t, u.nx, 0, passable && atGate ? 4.5 : passable ? 10 : 11.5);
+                break;
+            }
+        }
+    }
+    return Math.hypot(gx - u.x, gz - u.z) < 0.6 ? null : [gx, gz];
+}
+
+// l'IA donne aussi ses ordres : défendre sous la menace, escorter son roi quand il part piller
+function aiOrders(team) {
+    const enemy = enemyOf(team);
+    const bot = [...players.values()].find(p => p.bot && p.team === team && !p.dead);
+    const gate = toWorld(team, 0, 0, 12);
+    const threat = game.units.filter(u => u.team === enemy && Math.hypot(u.x - gate[0], u.z - gate[2]) < 18).length;
+    const mine = game.units.filter(u => u.team === team && !u.inside).length;
+    if (game.broken[enemy] && bot) setOrder(team, 'follow', bot.id);
+    else if (threat >= 3 && threat > mine * 0.8) setOrder(team, 'defend', null);
+    else setOrder(team, 'attack', null);
+}
+
 // ---------------------------------------------------------------- tours de mage et sorts
 function buildMage(team, key) {
     const m = MAGES[key];
     if (!m || game.phase !== 'playing' || game.mage[team][key] || game.gold[team] < m.build) return false;
     game.gold[team] -= m.build;
     game.mage[team][key] = true;
+    game.stats[team].built++;
     broadcast({ t: 'msg', text: `🔮 La ${m.tower} s'élève derrière le château ${whoOf(team)} : ${m.icon} ${m.spell} !` });
     return true;
 }
@@ -342,6 +452,7 @@ function castSpell(p, key, x, z) {
     }
     game.gold[team] -= m.cost;
     game.spellCd[team][key] = m.cd;
+    game.stats[team].spells++;
     return true;
 }
 
@@ -370,10 +481,10 @@ function updateDragons(dt) {
         dg.t -= dt;
         let goal;
         if (dg.t > 0) {
-            // la troupe ennemie la plus proche, où qu'elle soit (même dans sa cour) ; sinon il tournoie au milieu du terrain
+            // la troupe ennemie la plus proche hors de son château (la cour est à l'abri) ; sinon il tournoie au milieu du terrain
             let best = Infinity;
             for (const u of game.units) {
-                if (u.team !== enemy || u.hp <= 0) continue;
+                if (u.team !== enemy || u.hp <= 0 || u.inside || isInCastle(enemy, u.x, u.z)) continue;
                 const d = Math.hypot(u.x - dg.x, u.z - dg.z);
                 if (d < best) { best = d; goal = [u.x, u.z]; }
             }
@@ -397,8 +508,9 @@ function updateDragons(dt) {
         if (dg.cd <= 0) dg.breath = false;
         if (dg.t > 0 && dg.cd <= 0) {
             dg.cd = 0.4;
-            const hits = game.units.filter(u => u.team === enemy && u.hp > 0 && Math.hypot(u.x - dg.x, u.z - dg.z) < m.radius + UNITS[u.type].radius);
-            for (const u of hits) { u.hp = 0; u.lastHitBy = null; }
+            const hits = game.units.filter(u => u.team === enemy && u.hp > 0 && !u.inside && !isInCastle(enemy, u.x, u.z)
+                && Math.hypot(u.x - dg.x, u.z - dg.z) < m.radius + UNITS[u.type].radius);
+            for (const u of hits) { u.hp = 0; u.lastHitBy = null; u.killedBy = dg.team; }   // compté dans les stats, sans prime
             if (hits.length) { dg.breath = true; dg.cd = 0.8; }          // le souffle reste visible un instant
         }
     }
@@ -447,7 +559,8 @@ function damagePlayer(p, dmg, byTeam) {
     p.hp = 0;
     p.dead = true;
     p.respawn = RESPAWN;
-    game.gold[byTeam] += KING_BOUNTY;
+    earn(byTeam, KING_BOUNTY);
+    game.stats[p.team].kingsFallen++;
     fx.push({ k: 'kingDie', pid: p.id, p: [r2(p.x), r2(p.y), r2(p.z)] });
     send(p.ws, { t: 'dead', time: RESPAWN });
     broadcast({ t: 'msg', text: `${p.team === 'red' ? '💀 Le seigneur du Crâne' : '🦁 Le roi du Lion'} est tombé ! Un nouveau roi sera couronné dans ${RESPAWN} s…` });
@@ -493,7 +606,7 @@ function checkVault() {
         if (Math.hypot(p.x - vx, p.z - vz) < VAULT_R && p.y < 3.5) {
             game.phase = 'over';
             game.winner = p.team;
-            broadcast({ t: 'over', winner: p.team });
+            broadcast({ t: 'over', winner: p.team, stats: game.stats, duration: Math.round((Date.now() - game.startedAt) / 1000) });
             return;
         }
     }
@@ -501,19 +614,30 @@ function checkVault() {
 
 // ---------------------------------------------------------------- IA
 function updateAI(team, dt) {
+    // partie guidée : trêve jusqu'à la fin de la leçon (ou 4 minutes au plus)
+    if (game.peace && Date.now() - game.startedAt < 240000) return;
+    game.peace = false;
     game.aiTimer[team] -= dt;
     if (game.aiTimer[team] > 0) return;
     game.aiTimer[team] = LEVELS[game.level].think;
+    if (game.level !== 'easy') aiOrders(team);
     if (game.level !== 'easy' && (aiDefense(team) || aiMagic(team))) return;
     const enemyUnits = game.units.filter(u => u.team !== team);
     const mine = game.units.filter(u => u.team === team);
     if (!game.aiPlan[team]) {
-        const threat = enemyUnits.filter(u => u.type === 'catapult' || u.type === 'cannon').length;
+        const threat = enemyUnits.filter(u => u.type === 'catapult' || u.type === 'cannon' || u.type === 'ram').length;
         const melee = mine.filter(u => u.type === 'infantry' || u.type === 'knight').length;
+        // la troupe ennemie la plus nombreuse, et celle qui la bat
+        const count = {};
+        for (const u of enemyUnits) count[u.type] = (count[u.type] || 0) + 1;
+        const main = Object.keys(count).sort((a, b) => count[b] - count[a])[0];
+        const beats = { knight: 'infantry', ram: 'infantry', archer: 'knight', infantry: 'archer' }[main];
         if (threat > 0 && melee < threat * 3) game.aiPlan[team] = Math.random() < 0.5 ? 'knight' : 'infantry';
+        else if (beats && count[main] >= 3 && Math.random() < 0.6) game.aiPlan[team] = beats;
+        else if (!game.door[enemyOf(team)] && !game.broken[enemyOf(team)] && Math.random() < 0.35) game.aiPlan[team] = 'ram';
         else {
             const r = Math.random();
-            game.aiPlan[team] = r < 0.3 ? 'infantry' : r < 0.52 ? 'archer' : r < 0.74 ? 'knight' : r < 0.88 ? 'cannon' : 'catapult';
+            game.aiPlan[team] = r < 0.28 ? 'infantry' : r < 0.48 ? 'archer' : r < 0.68 ? 'knight' : r < 0.8 ? 'cannon' : r < 0.9 ? 'catapult' : 'ram';
         }
     }
     if (enqueue(team, game.aiPlan[team])) game.aiPlan[team] = null;
@@ -570,7 +694,7 @@ function updateBot(b, dt) {
     let goal = null, chasing = false;
     if (foe && isInCastle(team, foe.x, foe.z)) { goal = [foe.x, foe.z]; chasing = true; b.route = null; }
     else if (game.broken[enemy]) {
-        if (!b.route) b.route = lootRoute(b);
+        if (!b.route) { b.route = lootRoute(b); shout(b, 1); }       // « À l'attaque ! »
         while (b.route.length && Math.hypot(b.route[0][0] - b.x, b.route[0][1] - b.z) < 0.4) b.route.shift();
         if (b.route.length) goal = b.route[0];
     } else {
@@ -610,7 +734,7 @@ function step(dt) {
     syncBots();
     if (game.phase === 'playing') {
         for (const t of TEAMS) {
-            game.gold[t] += INCOME * dt * (game.ai[t] ? LEVELS[game.level].income : 1);
+            earn(t, INCOME * dt * (game.ai[t] ? LEVELS[game.level].income : 1));
             if (game.ai[t]) updateAI(t, dt);
         }
         trainUnits(dt);
@@ -652,7 +776,14 @@ function step(dt) {
             }
         }
 
-        let goal = null;
+        const order = game.orders[u.team].mode;
+        if (target && order !== 'attack' && !u.inside) {
+            const king = orderKing(u.team);
+            const anchor = king ? [king.x, king.z] : (([x, , z]) => [x, z])(toWorld(u.team, 0, 0, DEFEND_Z));
+            if (Math.hypot(target.x - anchor[0], target.z - anchor[1]) > (king ? LEASH.follow : LEASH.defend)) target = null;
+        }
+
+        let goal = null, ordered = false;
         if (target) {
             const reach = s.range + (isKing ? 0.3 : isTent ? 0.2 : UNITS[target.type].radius * 0.6);
             if (best > reach) goal = [target.x, target.z];
@@ -661,15 +792,16 @@ function step(dt) {
                 u.rot = Math.atan2(target.x - u.x, target.z - u.z);
                 if (u.cd <= 0) {
                     u.cd = s.cd;
+                    const mult = isKing || isTent ? 1 : counter(u.type, target.type);
                     if (s.ranged) {
                         const to = [target.x, isKing ? target.y + 0.9 : isTent ? 2.2 : 0.9, target.z];
                         const hit = isKing ? { player: target.id } : isTent ? { def: 'tent', team: enemy } : { unit: target.id };
-                        shoot(s.ranged, [u.x, 1.3, u.z], to, s.dmg, hit, u.team);
+                        shoot(s.ranged, [u.x, 1.3, u.z], to, s.dmg * mult, hit, u.team);
                     } else {
                         if (isKing) damagePlayer(target, s.dmg, u.team);
                         else if (isTent) damageDefense(enemy, 'tent', s.dmg, u.team);
-                        else damageUnit(target, s.dmg, u.team);
-                        fx.push({ k: 'melee', id: u.id });
+                        else damageUnit(target, s.dmg * mult, u.team);
+                        fx.push(mult >= 2 ? { k: 'melee', id: u.id, crit: 1, p: [r2(target.x), 1, r2(target.z)] } : { k: 'melee', id: u.id });
                     }
                 }
             }
@@ -682,6 +814,11 @@ function step(dt) {
                 if (u.inside === 1) u.inside = 0;
                 else if (game.door[u.team]) u.inside = 1;
             } else goal = [gx, gz];
+        } else if (order !== 'attack' && !(order === 'follow' && orderKing(u.team) && nearBarricade(enemy, u.x, u.z))) {
+            // ordres « défendre » / « suivre le roi » (sauf barricades ennemies sur le chemin de l'escorte : on les abat)
+            goal = orderGoal(u, s);
+            ordered = true;
+            if (!goal) u.state = 0;
         } else if (!s.ranged && game.def[enemy].barricade && nearBarricade(enemy, u.x, u.z)) {
             // 3. des barricades barrent l'approche du pont-levis : il faut les abattre pour passer
             u.state = 2;
@@ -689,10 +826,10 @@ function step(dt) {
             u.rot = Math.atan2(g[0] - u.x, g[2] - u.z);
             if (u.cd <= 0 && game.phase === 'playing') {
                 u.cd = s.cd;
-                damageDefense(enemy, 'barricade', s.dmg, u.team);
+                damageDefense(enemy, 'barricade', u.type === 'ram' ? s.castleDmg : s.dmg, u.team);
                 const thorns = DEFENSES.barricade.levels[game.def[enemy].barricade]?.thorns;
                 if (thorns) damageUnit(u, thorns, enemy);
-                fx.push({ k: 'melee', id: u.id, p: [r2(u.x), 0.6, r2(u.z + (enemy === 'red' ? -0.7 : 0.7))] });
+                fx.push(u.type === 'ram' ? { k: 'fire', id: u.id } : { k: 'melee', id: u.id, p: [r2(u.x), 0.6, r2(u.z + (enemy === 'red' ? -0.7 : 0.7))] });
             }
         } else {
             // 4. assez près du château ennemi pour l'attaquer ?
@@ -709,10 +846,10 @@ function step(dt) {
                         shoot(s.ranged, from, castlePoint(enemy, s.ranged === 'stone' ? 'all' : 'gate'), s.castleDmg, { castle: enemy }, u.team);
                         if (s.ranged !== 'arrow') fx.push({ k: 'fire', id: u.id });
                     } else {
-                        // porte fermée : les soldats et chevaliers font moins de dégâts
-                        const mult = !game.door[enemy] ? 0.4 : 1;
+                        // porte fermée : soldats et chevaliers font moins de dégâts… pas le bélier, fait pour ça
+                        const mult = !game.door[enemy] && u.type !== 'ram' ? 0.4 : 1;
                         damageCastle(enemy, s.castleDmg * mult);
-                        fx.push({ k: 'melee', id: u.id, p: [r2(u.x), r2(rnd(1.5, 3)), r2(u.z + d * 0.8)] });
+                        fx.push(u.type === 'ram' ? { k: 'fire', id: u.id } : { k: 'melee', id: u.id, p: [r2(u.x), r2(rnd(1.5, 3)), r2(u.z + d * 0.8)] });
                     }
                 }
             } else if (u.wp < PATH.length) {
@@ -724,7 +861,7 @@ function step(dt) {
         if (goal) {
             u.state = 0;
             const dx = goal[0] - u.x, dz = goal[1] - u.z, l = Math.hypot(dx, dz);
-            if (l < 0.3 && !target && !u.inside) u.wp++;
+            if (l < 0.3 && !target && !u.inside && !ordered) u.wp++;
             else if (l > 0) {
                 const m = Math.min(l, s.speed * dt);
                 u.x += dx / l * m; u.z += dz / l * m;
@@ -820,7 +957,10 @@ function step(dt) {
     // morts + primes
     for (const u of units) {
         if (u.hp > 0) continue;
-        if (u.lastHitBy) game.gold[u.lastHitBy] += UNITS[u.type].bounty;
+        if (u.lastHitBy) earn(u.lastHitBy, UNITS[u.type].bounty);
+        const killer = u.lastHitBy || u.killedBy;
+        if (killer && killer !== u.team) game.stats[killer].killed++;
+        game.stats[u.team].lost++;
         fx.push({ k: 'die', id: u.id, p: [r2(u.x), 0, r2(u.z)] });
     }
     game.units = units.filter(u => u.hp > 0);
@@ -863,6 +1003,7 @@ function snapshot() {
         // défenses : niveaux par équipe (ordre de DEF_KEYS), et PV en % des barricades et du chapiteau
         d: TEAMS.map(t => DEF_KEYS.map(k => game.def[t][k])),
         // tours de mage bâties, recharges des sorts (s), dragons en vol [id, équipe, x, z, cap, souffle, repart]
+        or: TEAMS.map(t => ORDERS.indexOf(game.orders[t].mode)),
         mg: TEAMS.map(t => MAGE_KEYS.map(k => (game.mage[t][k] ? 1 : 0))),
         sc: TEAMS.map(t => MAGE_KEYS.map(k => Math.ceil(game.spellCd[t][k]))),
         dr: game.dragons.map(dg => [dg.id, dg.team === 'red' ? 0 : 1, r2(dg.x), r2(dg.z), r2(dg.ry), dg.breath ? 1 : 0, dg.t <= 0 ? 1 : 0]),
@@ -945,15 +1086,16 @@ function enterRoom(ws, room, m) {
     visitors.delete(ws);
     send(ws, {
         t: 'welcome', id, team, mode: room.solo ? 'solo' : 'multi', room: { id: room.id, name: room.name, locked: !!room.pass },
-        units: UNITS, types: TYPES, defenses: DEFENSES, defKeys: DEF_KEYS, mages: MAGES, mageKeys: MAGE_KEYS, dragonY: DRAGON_Y, castleHp: CASTLE_HP, kingHp: KING_HP, queueMax: QUEUE_MAX, lan: lanAddresses(),
+        units: UNITS, types: TYPES, counters: COUNTERS, defenses: DEFENSES, defKeys: DEF_KEYS, mages: MAGES, mageKeys: MAGE_KEYS, dragonY: DRAGON_Y, castleHp: CASTLE_HP, kingHp: KING_HP, queueMax: QUEUE_MAX, lan: lanAddresses(),
     });
     console.log(`Joueur ${id} → salon ${room.id} (équipe ${team})`);
 
     if (room.solo) {
         newGame('waiting');
         game.ai = { red: team !== 'red', blue: team !== 'blue' };
-        game.level = LEVELS[m.level] ? m.level : 'normal';
+        game.level = m.tutorial ? 'easy' : LEVELS[m.level] ? m.level : 'normal';
         startGame();
+        game.peace = !!m.tutorial;
         return;
     }
     // un humain remplace l'IA de son équipe (et son roi)
@@ -1007,6 +1149,15 @@ function gameMessage(p, m) {
         }
         case 'attack':
             kingAttack(p);
+            break;
+        case 'shout':
+            shout(p, m.i);
+            break;
+        case 'tutorialDone':
+            game.peace = false;
+            break;
+        case 'order':
+            if (typeof m.mode === 'string' && ORDERS.includes(m.mode)) setOrder(p.team, m.mode, p.id);
             break;
         case 'mage':
             if (typeof m.key === 'string' && MAGES[m.key]) buildMage(p.team, m.key);

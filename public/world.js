@@ -1453,6 +1453,7 @@ export function makePlayerModel(team) {
 }
 
 export function makeUnitModel(type, team) {
+    if (type === 'ram') return makeRam(team);
     if (type === 'cannon') return makeCannon(team);
     if (type === 'catapult') return makeCatapult(team);
     return makeSoldier(type, team);
@@ -1536,6 +1537,88 @@ export function makeCatapult(team) {
     root.add(sh);
     root.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
     return { root, arm, stone, wheels, kind: 'catapult', anim: 0 };
+}
+
+// bélier : un abri roulant à toit aux couleurs du camp, sous lequel se balance un tronc à tête de bélier en fer
+export function makeRam(team) {
+    const F = FACTIONS[team];
+    const root = new THREE.Group();
+    const V = (x, y, z) => new THREE.Vector3(x, y, z);
+    const wood = plastic(F.wood, 0.5), dark = plastic(F.woodDark, 0.5);
+    const roofColor = team === 'red' ? '#a3171d' : '#1f5fbf';
+    // châssis et roues
+    for (const x of [-0.65, 0.65]) {
+        const rail = new THREE.Mesh(roundedBox(0.16, 0.2, 2.7, 0.04), wood);
+        rail.position.set(x, 0.5, 0);
+        root.add(rail);
+    }
+    for (const z of [-1.15, 0, 1.15]) {
+        const cross = new THREE.Mesh(roundedBox(1.46, 0.15, 0.15, 0.04), dark);
+        cross.position.set(0, 0.5, z);
+        root.add(cross);
+    }
+    const wheels = [];
+    for (const x of [-0.86, 0.86]) for (const z of [-0.9, 0.9]) {
+        const w = spokedWheel(0.42, F.wood, F.hub);
+        w.position.set(x, 0.42, z);
+        root.add(w);
+        wheels.push(w);
+    }
+    // montants et toit à deux pans (il protège les servants… des flèches, pas des lances)
+    for (const x of [-0.62, 0.62]) for (const z of [-1.15, 1.15]) root.add(beam(V(x, 0.55, z), V(x * 0.25, 2.15, z), 0.13, F.wood));
+    for (const s of [-1, 1]) {
+        const slab = new THREE.Mesh(roundedBox(0.95, 0.09, 2.9, 0.03), plastic(roofColor, 0.5));
+        slab.position.set(s * 0.4, 1.9, 0);
+        slab.rotation.z = s * -0.62;
+        root.add(slab);
+        for (const z of [-1.0, -0.33, 0.33, 1.0]) {
+            const plank = new THREE.Mesh(roundedBox(0.97, 0.04, 0.06, 0.01), dark);
+            plank.position.set(s * 0.4, 1.95, z);
+            plank.rotation.z = s * -0.62;
+            root.add(plank);
+        }
+        const sh = paintedShield(F.emblem, 0.5, 0.6, F.border);
+        sh.position.set(s * 0.71, 1.25, 0);
+        sh.rotation.y = s * Math.PI / 2;
+        root.add(sh);
+    }
+    const ridge = new THREE.Mesh(roundedBox(0.14, 0.14, 3.0, 0.04), dark);
+    ridge.position.y = 2.2;
+    root.add(ridge);
+    // le tronc suspendu, qui se balance d'avant en arrière pour frapper
+    const swing = new THREE.Group();
+    swing.position.set(0, 1.95, 0);
+    root.add(swing);
+    for (const z of [-0.6, 0.6]) {
+        const rope = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.95, 6), plastic('#d9c7a0', 0.8));
+        rope.position.set(0, -0.47, z);
+        swing.add(rope);
+    }
+    const log = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.23, 3.0, 14), plastic('#7a4f28', 0.6));
+    log.rotation.x = Math.PI / 2;
+    log.position.set(0, -0.98, 0.15);
+    swing.add(log);
+    const iron = metal('#8a9098');
+    for (const z of [-0.9, 0, 0.9]) {
+        const band = new THREE.Mesh(new THREE.TorusGeometry(0.225, 0.035, 6, 18), iron);
+        band.position.set(0, -0.98, z);
+        swing.add(band);
+    }
+    // tête de bélier en fer, cornes enroulées
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.32, 16, 12), iron);
+    head.scale.set(1, 0.9, 1.25);
+    head.position.set(0, -0.98, 1.72);
+    const snout = new THREE.Mesh(new THREE.SphereGeometry(0.2, 12, 10), iron);
+    snout.position.set(0, -1.04, 2.0);
+    swing.add(head, snout);
+    for (const s of [-1, 1]) {
+        const horn = new THREE.Mesh(new THREE.TorusGeometry(0.17, 0.065, 8, 18, Math.PI * 1.5), metal(COLORS.gold));
+        horn.position.set(s * 0.3, -0.92, 1.62);
+        horn.rotation.set(0, Math.PI / 2, s > 0 ? 0.6 : 2.5);
+        swing.add(horn);
+    }
+    root.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+    return { root, wheels, swing, kind: 'ram', anim: 0 };
 }
 
 export function makeCannon(team) {

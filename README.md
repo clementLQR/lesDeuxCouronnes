@@ -9,11 +9,13 @@ Jeu 3D dans le navigateur, réalisé avec [Three.js](https://threejs.org/) et un
 
 ## Les règles
 
-- **Lève ton armée** : soldats, archers et chevaliers sortent de la caserne, canons et catapultes de l'atelier de siège (touches `1` à `5`). Ils quittent le château par le pont-levis.
+- **Lève ton armée** : soldats, archers et chevaliers sortent de la caserne, canons, catapultes et béliers de l'atelier de siège (touches `1` à `6`). Ils quittent le château par le pont-levis.
 - **Remplis ton coffre** : 10 pièces d'or par seconde, et chaque soldat ennemi vaincu rapporte la moitié de ce qu'il a coûté.
 - **Le roi aussi se bat** (`F` ou clic). S'il tombe, un nouveau roi est couronné dans la cour 5 secondes plus tard.
 - **Le pont-levis** (`E`) : le lever protège ton trésor, mais tes soldats restent enfermés.
-- **Les défenses** (touches `6` à `9`) : renforcer ses tours, chauffer l'huile, dresser des barricades ou un chapiteau hors les murs. Tenir un siège devient possible… mais les canons ennemis finissent toujours par user les murs.
+- **Les ordres** : toute l'armée obéit à un même ordre. ⚔️ **Attaquer** (`V`) : marcher sur le château ennemi ; 🛡️ **Défendre** (`B`) : tenir la ligne devant son pont-levis, sous l'étendard ; 👑 **Suivre le roi** (`N`) : escorter son roi, en passant par les portes, jusque dans le château adverse.
+- **Forces et faiblesses** : les lances des soldats battent les chevaliers (dégâts ×2,5) et le bélier (×3), les chevaliers battent les archers (×2), les archers battent les soldats (×2). À l'inverse, les chevaliers frappent moins fort les soldats (×0,7) et les flèches rebondissent sur leur armure (×0,6).
+- **Les défenses** (touches `7`, `8`, `9` et `0`) : renforcer ses tours, chauffer l'huile, dresser des barricades ou un chapiteau hors les murs. Tenir un siège devient possible… mais les canons ennemis finissent toujours par user les murs.
 - **La victoire** : un château à 0 PV voit son pont-levis céder pour de bon. Le premier roi qui entre dans la salle au trésor adverse gagne.
 
 | Troupe | Coût | Prime | Formation |
@@ -23,6 +25,7 @@ Jeu 3D dans le navigateur, réalisé avec [Three.js](https://threejs.org/) et un
 | Chevalier | 70 | 35 | 6 s |
 | Canon | 150 | 75 | 9 s |
 | Engin de siège | 200 | 100 | 10 s |
+| 🐏 Bélier | 160 | 80 | 8 s |
 | Roi adverse | — | 100 | — |
 
 | Défense | Niveaux (prix) | Effet |
@@ -38,9 +41,19 @@ Jeu 3D dans le navigateur, réalisé avec [Three.js](https://threejs.org/) et un
 |---|---|---|---|---|
 | Alchimiste (250) | 🧪 Potion de vie (`R`) | 60 | 30 s | Rend 150 PV au roi. |
 | Pyromancien (350) | ☄️ Boule de feu (`T`) | 90 | 14 s | On vise le champ de bataille à la souris : elle brûle les troupes et les obstacles ennemis (barricades, chapiteau). |
-| Invocateur (800) | 🐉 Dragon (`Y`) | 300 | 100 s | Le dragon du royaume (Dragon Royal pour le Lion, Dragon des Ombres pour le Crâne) survole le terrain pendant 18 s, chasse les troupes ennemies et réduit en cendres toutes celles qu'il survole. Il ne touche à aucune construction, et ses victimes ne rapportent pas d'or. |
+| Invocateur (1200) | 🐉 Dragon (`Y`) | 500 | 5 min | Le dragon du royaume (Dragon Royal pour le Lion, Dragon des Ombres pour le Crâne) survole le terrain pendant 18 s, chasse les troupes ennemies et réduit en cendres toutes celles qu'il survole hors de leur château (la cour adverse reste à l'abri). Il ne touche à aucune construction, et ses victimes ne rapportent pas d'or. |
 
 **Commandes** : `ZQSD` / flèches pour marcher, `Maj` pour courir, `Espace` pour sauter, glisser la souris pour tourner la caméra, molette pour zoomer.
+
+**Sur tablette** : un joystick pour marcher, des boutons pour frapper, sauter, courir et manœuvrer le pont-levis ; un doigt tourne la caméra, deux doigts zooment.
+
+**Cris rapides** : le bouton 📣 fait crier ton roi (« Oyez, oyez ! », « À l'attaque ! », « Bien joué ! »…), dans une bulle visible de tous.
+
+**Partie guidée** : depuis l'accueil, une partie solo pas à pas (se déplacer, former une troupe, le pont-levis, les ordres, une tour de mage, les barricades) pendant laquelle l'IA attend que la leçon soit finie.
+
+**Fin de partie** : un tableau compare les deux royaumes (troupes formées, abattues et perdues, or gagné, dégâts au château, sorts, constructions, rois tombés) et donne la durée de la bataille.
+
+**Son** : bruitages et musique de boîte à musique sont synthétisés en direct dans le navigateur (aucun fichier audio). Les boutons 🔊 et 🎵, en haut à droite, coupent les bruitages ou la musique ; le choix est mémorisé.
 
 ## Modes de jeu
 
@@ -80,3 +93,4 @@ Le projet contient un fichier [`render.yaml`](render.yaml).
 | `public/index.html` | Page, interface (menu, boutique, barres de vie) et styles. |
 | `public/main.js` | Client : connexion, joueur, caméra, affichage des troupes, effets, menu. |
 | `public/world.js` | Construction du monde 3D : chambre, châteaux, figurines, engins de siège. |
+| `public/audio.js` | Sons et musique synthétisés (Web Audio API), atténués selon la distance. |
