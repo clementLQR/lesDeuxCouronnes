@@ -5,6 +5,9 @@ import {
     colliders, groundColliders, flags, flames, spinners, mists, TEAM, plastic,
 } from './world.js';
 import { unlockAudio, play, startLoop, setListener, setSfx, setMusic, audioPrefs, setBattle } from './audio.js';
+import { mergeStatic, makeBatch, bakeModel } from './bake.js';
+import { compactColliders, prepare, finishColliders } from './collision.js';
+import { createQuality, wantAntialias, QUALITY_LABEL } from './quality.js';
 
 // le son ne peut démarrer qu'après un geste du joueur (règle des navigateurs)
 for (const ev of ['pointerdown', 'keydown']) window.addEventListener(ev, unlockAudio, { capture: true });
@@ -13,9 +16,19 @@ for (const ev of ['pointerdown', 'keydown']) window.addEventListener(ev, unlockA
 //  Les Deux Couronnes : deux châteaux face à face
 // =====================================================================
 
+performance.mark('modules');            // repères de chargement (visibles dans l'onglet Performance du navigateur)
 const canvas = document.getElementById('canvas');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+// high-performance : sur un portable à deux cartes graphiques, on demande la plus puissante
+let renderer;
+try {
+    renderer = new THREE.WebGLRenderer({ canvas, antialias: wantAntialias(), powerPreference: 'high-performance' });
+} catch (err) {
+    // pas de 3D sur cet appareil (WebGL désactivé ou carte graphique trop ancienne) : on le dit plutôt que de figer la page
+    document.getElementById('noGame').hidden = false;
+    document.getElementById('noGameText').textContent = "Ton navigateur n'arrive pas à afficher la 3D (WebGL). " +
+        "Essaie de mettre à jour ton navigateur, ou d'activer « l'accélération matérielle » dans ses réglages.";
+    throw err;
+}
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -53,6 +66,28 @@ castles.blue.group.position.set(0, 0, 40);
 castles.blue.group.rotation.y = Math.PI;
 scene.updateMatrixWorld(true);
 
+// le décor ne bouge plus : collisions regroupées dans un arbre, pièces immobiles fusionnées (voir bake.js, collision.js)
+performance.mark('built');
+compactColliders(colliders);
+compactColliders(groundColliders);
+performance.mark('colliders');
+mergeStatic(scene, { chunk: 24 });
+performance.mark('merged');
+for (const c of Object.values(castles)) {
+    // objets qui peuvent devenir des obstacles plus tard (défenses, tours de mage)
+    for (const o of [c.tentGroup, c.barricadeGroup, ...Object.values(c.mageTowers).map(t => t.group)]) prepare(o);
+    // créneaux : tous dessinés d'un coup tant qu'ils tiennent, et le même lot sert d'obstacle
+    c.merlonBatch = makeBatch(c.merlons);
+    scene.add(c.merlonBatch.mesh);
+    prepare(c.merlonBatch.mesh);
+    for (const m of c.merlons) colliders.splice(colliders.indexOf(m), 1);
+    colliders.push(c.merlonBatch.mesh);
+    c.merlons.forEach((m, i) => { m.userData.batchIndex = i; m.visible = false; });
+}
+performance.mark('world');
+// définition de l'image et ombres adaptées à l'appareil (voir quality.js)
+const quality = createQuality({ renderer, sun, scene, toast: (text, sec) => toast(text, sec) });
+
 // salles des coffres (au pied de la tour arrière droite de chaque château)
 const vaults = Object.values(castles).map(c => ({ castle: c, pos: c.group.localToWorld(c.vaultLocal.clone()), r: c.vaultRadius }));
 let inVault = null;
@@ -64,6 +99,7 @@ function toWorld(team, lx, ly, lz) {
 
 // ---------------------------------------------------------------- raycasts
 const ray = new THREE.Raycaster();
+ray.firstHitOnly = true;               // seul le premier obstacle nous intéresse (beaucoup plus rapide)
 const DOWN = new THREE.Vector3(0, -1, 0);
 const UP = new THREE.Vector3(0, 1, 0);
 const tmpO = new THREE.Vector3();
@@ -465,6 +501,16 @@ function refreshSoundBtns() {
 sfxBtn.addEventListener('click', () => { unlockAudio(); setSfx(!audioPrefs().sfx); refreshSoundBtns(); play('click'); sfxBtn.blur(); });
 musicBtn.addEventListener('click', () => { unlockAudio(); setMusic(!audioPrefs().music); refreshSoundBtns(); play('click'); musicBtn.blur(); });
 refreshSoundBtns();
+// qualité de l'image : auto → belle → équilibrée → rapide
+const qualityBtn = el('qualityBtn');
+const refreshQualityBtn = () => { qualityBtn.title = `Qualité de l'image (${QUALITY_LABEL[quality.mode]})`; };
+qualityBtn.addEventListener('click', () => {
+    const mode = quality.cycle();
+    refreshQualityBtn();
+    toast(`🖼️ Qualité ${QUALITY_LABEL[mode]}`, 3);
+    qualityBtn.blur();
+});
+refreshQualityBtn();
 // petit « clic » sur tous les boutons de l'interface (menu, boutique, grimoire…)
 document.addEventListener('click', e => {
     if (e.target.closest('button') && !e.target.closest('#soundCtl')) play('click');
@@ -751,7 +797,8 @@ function createUnit(id, type, team, x, z, rot) {
     model.root.position.set(x, unitGround(x, z), z);
     model.root.rotation.y = rot;
     scene.add(model.root);
-    const u = { id, type, team, model, bar, fill, x, z, tx: x, tz: z, rot, hp: 100, state: 0, big, seen: true };
+    if (model.low) model.low.root.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+    const u = { id, type, team, model, hi: model, low: model.low || model, bar, fill, x, z, tx: x, tz: z, rot, hp: 100, state: 0, big, seen: true, gx: NaN, gz: NaN, gy: 0, gt: 0 };
     if (team === myTeam && phase === 'playing') play('horn', [x, 1, z], 0.7);
     unitObjs.set(id, u);
     return u;
@@ -938,7 +985,7 @@ for (const b of document.querySelectorAll('.orderBtn')) b.addEventListener('clic
 function refreshOrders(s) {
     const mode = ORDER_MODES[s.or[myTeam === 'red' ? 0 : 1]] || 'attack';
     for (const b of document.querySelectorAll('.orderBtn')) b.classList.toggle('active', b.dataset.order === mode);
-    el('orderHint').textContent = ORDER_HINT[mode];
+    setText(el('orderHint'), ORDER_HINT[mode]);
     // étendard planté au point de défense de chaque camp qui défend
     ['red', 'blue'].forEach((t, i) => { defendFlags[t].visible = ORDER_MODES[s.or[i]] === 'defend'; });
 }
@@ -1081,6 +1128,7 @@ scene.add(aimRing);
 const aimPoint = new THREE.Vector3();
 let aimValid = false;
 const aimRay = new THREE.Raycaster();
+aimRay.firstHitOnly = true;
 function setAiming(on) {
     aiming = on;
     aimRing.visible = on && aimValid;
@@ -1207,8 +1255,27 @@ function updateTentBars() {
     }
 }
 
+// troupe vue de près : figurine détaillée ; de loin : version allégée (même pose, même animation)
+const LOD_FAR = 26 * 26, LOD_NEAR = 22 * 22;
+function useModel(u, m) {
+    const old = u.model;
+    if (old === m) return;
+    m.root.position.copy(old.root.position);
+    m.root.rotation.copy(old.root.rotation);
+    m.phase = old.phase; m.swing = old.swing;
+    if ('anim' in old) m.anim = old.anim;
+    m.root.add(u.bar);
+    scene.remove(old.root);
+    scene.add(m.root);
+    u.model = m;
+}
+
 function updateUnits(dt) {
+    const cx = camera.position.x, cz = camera.position.z;
     for (const u of unitObjs.values()) {
+        const d2 = (u.x - cx) ** 2 + (u.z - cz) ** 2;
+        if (u.model === u.hi && d2 > LOD_FAR) useModel(u, u.low);
+        else if (u.model === u.low && d2 < LOD_NEAR) useModel(u, u.hi);
         const k = 1 - Math.exp(-10 * dt);
         const ox = u.x, oz = u.z;
         if (Math.hypot(u.tx - u.x, u.tz - u.z) > 6) { u.x = u.tx; u.z = u.tz; }
@@ -1216,8 +1283,10 @@ function updateUnits(dt) {
         u.z += (u.tz - u.z) * k;
         const moved = Math.hypot(u.x - ox, u.z - oz);
         const root = u.model.root;
-        const gy = unitGround(u.x, u.z);
-        root.position.set(u.x, THREE.MathUtils.lerp(root.position.y, gy, 1 - Math.exp(-15 * dt)), u.z);
+        if (Math.abs(u.x - u.gx) > 0.02 || Math.abs(u.z - u.gz) > 0.02 || --u.gt <= 0) {
+            u.gy = unitGround(u.x, u.z); u.gx = u.x; u.gz = u.z; u.gt = 12;
+        }
+        root.position.set(u.x, THREE.MathUtils.lerp(root.position.y, u.gy, 1 - Math.exp(-15 * dt)), u.z);
         let diff = u.rot - root.rotation.y;
         diff = Math.atan2(Math.sin(diff), Math.cos(diff));
         root.rotation.y += diff * (1 - Math.exp(-8 * dt));
@@ -1285,19 +1354,24 @@ const stoneGeo = new THREE.IcosahedronGeometry(0.32, 1);
 const ballGeo = new THREE.SphereGeometry(0.2, 14, 10);
 
 const fireballGeo = new THREE.IcosahedronGeometry(0.55, 2);
+const fireballMat = new THREE.MeshStandardMaterial({ color: '#ffb02e', emissive: '#ff6a00', emissiveIntensity: 2.5 });
+const arrowModel = (() => {
+    const root = new THREE.Group();
+    root.add(new THREE.Mesh(arrowGeo, plastic('#7a4a22')), new THREE.Mesh(arrowTipGeo, plastic('#5a5f66')));
+    return bakeModel({ root }).root;                       // fût et pointe fusionnés : un seul objet par flèche
+})();
 function launch(kind, a, b, d, r = 0) {
     const A = new THREE.Vector3(...a), Bv = new THREE.Vector3(...b);
     if (A.y < 3) A.y += unitGround(A.x, A.z);
     if (Bv.y < 1.5) Bv.y += unitGround(Bv.x, Bv.z);
     let mesh;
     if (kind === 'arrow') {
-        mesh = new THREE.Group();
-        mesh.add(new THREE.Mesh(arrowGeo, plastic('#7a4a22')), new THREE.Mesh(arrowTipGeo, plastic('#5a5f66')));
+        mesh = arrowModel.clone();
     } else if (kind === 'ball') {
         mesh = new THREE.Mesh(ballGeo, plastic('#1f2024', 0.3));
         mesh.castShadow = true;
     } else if (kind === 'fireball') {
-        mesh = new THREE.Mesh(fireballGeo, new THREE.MeshStandardMaterial({ color: '#ffb02e', emissive: '#ff6a00', emissiveIntensity: 2.5 }));
+        mesh = new THREE.Mesh(fireballGeo, fireballMat);
     } else {
         mesh = new THREE.Mesh(stoneGeo, plastic('#8d939a', 0.6));
         mesh.castShadow = true;
@@ -1326,7 +1400,6 @@ function updateProjectiles(dt) {
             else if (p.kind === 'fireball') {
                 play('fireballBoom', p.B.toArray());
                 // explosion : flammes sur toute la zone, puis fumée
-                p.mesh.material.dispose();
                 for (let i = 0; i < 10; i++) {
                     const a = Math.random() * Math.PI * 2, rr = Math.random() * p.r;
                     puff(p.B.clone().add(new THREE.Vector3(Math.cos(a) * rr, 0.3, Math.sin(a) * rr)), ['#ffe27a', '#ffb02e', '#ff6a1a'][i % 3], 2, 1.6, 1.2);
@@ -1344,27 +1417,66 @@ function updateProjectiles(dt) {
     }
 }
 
+// fumée, poussière, étincelles : toutes les bouffées sont dessinées en un seul appel (un maillage instancié,
+// chaque bouffée y a sa position, sa taille, sa couleur et sa transparence) au lieu d'un objet et d'un matériau chacune
+const PUFF_MAX = 700;
 const puffs = [];
 const puffGeo = new THREE.SphereGeometry(1, 12, 8);
+const puffAlpha = new THREE.InstancedBufferAttribute(new Float32Array(PUFF_MAX), 1);
+puffAlpha.setUsage(THREE.DynamicDrawUsage);
+puffGeo.setAttribute('puffAlpha', puffAlpha);
+const puffMat = new THREE.MeshStandardMaterial({ roughness: 1, transparent: true, depthWrite: false });
+puffMat.onBeforeCompile = sh => {
+    sh.vertexShader = `attribute float puffAlpha;
+varying float vPuffAlpha;
+${sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n\tvPuffAlpha = puffAlpha;')}`;
+    sh.fragmentShader = `varying float vPuffAlpha;
+${sh.fragmentShader.replace('#include <color_fragment>', '#include <color_fragment>\n\tdiffuseColor.a *= vPuffAlpha;')}`;
+};
+const puffMesh = new THREE.InstancedMesh(puffGeo, puffMat, PUFF_MAX);
+puffMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+puffMesh.setColorAt(0, new THREE.Color());
+puffMesh.instanceColor.setUsage(THREE.DynamicDrawUsage);
+puffMesh.count = 0;
+puffMesh.frustumCulled = false;
+scene.add(puffMesh);
+const puffColors = new Map();
 function puff(at, color = '#d9d2c5', n = 6, size = 1, rise = 1) {
+    let c = puffColors.get(color);
+    if (!c) puffColors.set(color, c = new THREE.Color(color));
     for (let i = 0; i < n; i++) {
-        const m = new THREE.Mesh(puffGeo, new THREE.MeshStandardMaterial({ color, roughness: 1, transparent: true, opacity: 0.85, depthWrite: false }));
-        m.position.copy(at).add(new THREE.Vector3((Math.random() - 0.5) * size, Math.random() * 0.4 * size, (Math.random() - 0.5) * size));
-        m.scale.setScalar(0.15 * size);
-        scene.add(m);
-        puffs.push({ m, t: 0, life: 0.6 + Math.random() * 0.5, grow: (0.4 + Math.random() * 0.5) * size, vy: (0.5 + Math.random()) * rise });
+        if (puffs.length >= PUFF_MAX) puffs.shift();             // bataille géante : les plus anciennes s'effacent
+        puffs.push({
+            x: at.x + (Math.random() - 0.5) * size, y: at.y + Math.random() * 0.4 * size, z: at.z + (Math.random() - 0.5) * size,
+            c, t: 0, life: 0.6 + Math.random() * 0.5, grow: (0.4 + Math.random() * 0.5) * size, vy: (0.5 + Math.random()) * rise,
+        });
     }
 }
 function updatePuffs(dt) {
-    for (let i = puffs.length - 1; i >= 0; i--) {
+    const M = puffMesh.instanceMatrix.array, C = puffMesh.instanceColor.array, A = puffAlpha.array;
+    let n = 0;
+    for (let i = 0; i < puffs.length; i++) {
         const p = puffs[i];
         p.t += dt;
         const k = p.t / p.life;
-        if (k >= 1) { scene.remove(p.m); p.m.material.dispose(); puffs.splice(i, 1); continue; }
-        p.m.scale.setScalar(0.15 + p.grow * k);
-        p.m.position.y += p.vy * dt;
-        p.m.material.opacity = 0.85 * (1 - k);
+        if (k >= 1) continue;
+        p.y += p.vy * dt;
+        puffs[n] = p;
+        const sc = 0.15 + p.grow * k, o = n * 16;
+        M[o] = sc; M[o + 1] = 0; M[o + 2] = 0; M[o + 3] = 0;
+        M[o + 4] = 0; M[o + 5] = sc; M[o + 6] = 0; M[o + 7] = 0;
+        M[o + 8] = 0; M[o + 9] = 0; M[o + 10] = sc; M[o + 11] = 0;
+        M[o + 12] = p.x; M[o + 13] = p.y; M[o + 14] = p.z; M[o + 15] = 1;
+        C[n * 3] = p.c.r; C[n * 3 + 1] = p.c.g; C[n * 3 + 2] = p.c.b;
+        A[n] = 0.85 * (1 - k);
+        n++;
     }
+    puffs.length = n;
+    puffMesh.count = n;
+    if (!n) return;
+    puffMesh.instanceMatrix.clearUpdateRanges(); puffMesh.instanceMatrix.addUpdateRange(0, n * 16); puffMesh.instanceMatrix.needsUpdate = true;
+    puffMesh.instanceColor.clearUpdateRanges(); puffMesh.instanceColor.addUpdateRange(0, n * 3); puffMesh.instanceColor.needsUpdate = true;
+    puffAlpha.clearUpdateRanges(); puffAlpha.addUpdateRange(0, n); puffAlpha.needsUpdate = true;
 }
 
 // couronnement : colonne de lumière dorée, étincelles et couronne qui descend sur la tête du roi
@@ -1409,12 +1521,13 @@ function crumble(castle, hp) {
     if (target < castle.fallen) { restoreCastle(castle); return; }
     while (castle.fallen < target) {
         const m = castle.merlons[castle.fallen++];
+        castle.merlonBatch.setVisible(m.userData.batchIndex, false);
+        m.visible = true;
         scene.attach(m);
-        const i = colliders.indexOf(m);
-        if (i >= 0) colliders.splice(i, 1);
         falling.push({ m, vy: 2, vx: (Math.random() - 0.5) * 3, vz: (Math.random() - 0.5) * 3, spin: (Math.random() - 0.5) * 8, done: false });
         puff(m.position, '#c9c4bb', 4, 1.2);
     }
+    castle.merlonBatch.sync();
 }
 function restoreCastle(castle) {
     for (let i = 0; i < castle.fallen; i++) {
@@ -1423,11 +1536,13 @@ function restoreCastle(castle) {
         h.parent.add(m);
         m.position.copy(h.pos);
         m.rotation.copy(h.rot);
-        if (!colliders.includes(m)) colliders.push(m);
+        m.visible = false;
+        castle.merlonBatch.setVisible(m.userData.batchIndex, true);
         const f = falling.findIndex(f => f.m === m);
         if (f >= 0) falling.splice(f, 1);
     }
     castle.fallen = 0;
+    castle.merlonBatch.sync();
 }
 function updateFalling(dt) {
     for (const f of falling) {
@@ -1505,8 +1620,8 @@ function onSnapshot(s) {
     }
     for (const [id, r] of remotes) if (!seen.has(id)) { scene.remove(r.fig.root); remotes.delete(id); }
 
-    // effets
-    for (const f of s.fx) {
+    // effets (onglet caché : l'animation est en pause, on ne les accumule pas pour tout rejouer d'un coup au retour)
+    for (const f of document.hidden ? [] : s.fx) {
         if (f.k === 'arrow' || f.k === 'stone' || f.k === 'ball' || f.k === 'fireball') {
             launch(f.k, f.a, f.b, f.d, f.r);
             if (f.k === 'arrow') play('arrow', f.a);
@@ -1614,7 +1729,9 @@ function buildShop() {
         b.title = `${u.name} : coûte ${u.cost}, rapporte ${u.bounty} à l'ennemi qui l'abat · ${u.train} s de formation ` +
             `(${u.building === 'barracks' ? 'caserne, ou chapiteau s\'il est dressé' : 'atelier de siège'})` +
             (strong.length ? `\n💪 Fort contre : ${names(strong)}` : '') + (weak.length ? `\n⚠️ Craint : ${names(weak)}` : '') +
-            (type === 'ram' ? '\n🐏 Frappe le pont-levis à pleine force, même levé, et défonce les barricades.' : '');
+            (type === 'ram' ? '\n🐏 Frappe le pont-levis à pleine force, même levé, et défonce les barricades.' : '') +
+            (u.splash ? '\n💥 Ses boulets explosent au milieu des troupes ennemies (dégâts de zone) ; sinon, il tire sur le château.' : '') +
+            (type === 'catapult' ? '\n🎯 Tire de plus loin que les tours de garde : pilonne chapiteau, barricades puis château.' : '');
         // pastille verte : ce que la troupe bat ; pastille rouge : ce qu'elle craint
         const vs = (strong.length ? `<b>${strong.map(t => UNITS[t].icon).join('')}</b>` : '') +
             (weak.length ? `<i>${weak.map(t => UNITS[t].icon).join('')}</i>` : '');
@@ -1646,8 +1763,22 @@ const DEF_HELP = {
     tent: "Chapiteau : une caserne hors les murs. Tes soldats, archers et chevaliers peuvent y être formés et partent sans passer par le pont-levis. Mais l'ennemi peut l'abattre (les engins de siège le pilonnent de loin), et il faut alors attendre 40 s pour le relever !",
 };
 
+// l'interface est rafraîchie 20 fois par seconde : on n'écrit dans la page que ce qui a changé
+// (chaque écriture oblige le navigateur à recalculer la mise en page)
+const shown = new WeakMap();
+function changed(node, key, v) {
+    let m = shown.get(node);
+    if (!m) shown.set(node, m = {});
+    if (m[key] === v) return false;
+    m[key] = v;
+    return true;
+}
+const setText = (node, v) => { v = String(v); if (changed(node, 't', v)) node.textContent = v; };
+const setHTML = (node, v) => { if (changed(node, 'h', v)) node.innerHTML = v; };
+const setWidth = (node, v) => { if (changed(node, 'w', v)) node.style.width = v; };
+
 function updateHud(s, kingHp) {
-    ui.gold.textContent = myGold;
+    setText(ui.gold, myGold);
     // files de formation : nombre en attente par type et avancement de la troupe en cours
     // (soldats, archers et chevaliers : caserne + chapiteau)
     const myI = myTeam === 'red' ? 0 : 1;
@@ -1660,9 +1791,9 @@ function updateHud(s, kingHp) {
         const lists = queues[u.building];
         const n = lists.reduce((sum, [list]) => sum + list.filter(t => t === ti).length, 0);
         const progress = Math.max(0, ...lists.map(([list, p]) => (list[0] === ti ? p : 0)));
-        b.querySelector('.queued').textContent = n ? `×${n}` : '';
+        setText(b.querySelector('.queued'), n ? `×${n}` : '');
         b.querySelector('.queued').classList.toggle('show', n > 0);
-        b.querySelector('.prog i').style.width = progress * 100 + '%';
+        setWidth(b.querySelector('.prog i'), Math.round(progress * 100) + '%');
         b.disabled = phase !== 'playing' || myGold < u.cost || lists.every(([list]) => list.length >= QUEUE_MAX);
     }
     // défenses : niveau actuel, prix du prochain, PV des constructions
@@ -1671,13 +1802,13 @@ function updateHud(s, kingHp) {
         const lv = s.d[myI][DEF_KEYS.indexOf(key)];
         const next = d.levels[lv + 1];
         const max = d.levels.length - 1;
-        const shown = key === 'towers' ? lv + 1 : lv;            // les tours démarrent au niveau 1
-        b.querySelector('.lvl').textContent = key === 'tent' ? (lv ? 'dressé' : '') : `Nv ${shown}/${key === 'towers' ? max + 1 : max}`;
+        const lvShown = key === 'towers' ? lv + 1 : lv;          // les tours démarrent au niveau 1
+        setText(b.querySelector('.lvl'), key === 'tent' ? (lv ? 'dressé' : '') : `Nv ${lvShown}/${key === 'towers' ? max + 1 : max}`);
         b.querySelector('.lvl').classList.toggle('show', key !== 'tent' || lv > 0);
         const hpI = ['barricade', 'tent'].indexOf(key);
         const rebuild = hpI >= 0 && s.dc ? s.dc[myI][hpI] : 0;    // abattue : délai avant de pouvoir la relever
-        b.querySelector('.cost').textContent = rebuild ? `⏳ ${rebuild} s` : next ? `🪙 ${next.cost}` : (key === 'tent' ? '✔ dressé' : '✔ max');
-        b.querySelector('.prog i').style.width = (hpI >= 0 && lv ? s.dh[myI][hpI] : 0) + '%';
+        setText(b.querySelector('.cost'), rebuild ? `⏳ ${rebuild} s` : next ? `🪙 ${next.cost}` : (key === 'tent' ? '✔ dressé' : '✔ max'));
+        setWidth(b.querySelector('.prog i'), (hpI >= 0 && lv ? s.dh[myI][hpI] : 0) + '%');
         b.classList.toggle('built', !next);
         b.disabled = phase !== 'playing' || !next || myGold < next.cost || rebuild > 0;
     }
@@ -1688,25 +1819,27 @@ function updateHud(s, kingHp) {
         const { state, cd } = spellState(key);
         const locked = state.startsWith('locked');
         if (!locked) anyBuilt = true;
-        b.className = `spellBtn ${locked ? 'locked' : ''} ${state}${key === 'fireball' && aiming ? ' aiming' : ''}${b === tutoHi ? ' tutoHi' : ''}`;
-        b.querySelector('.saction').innerHTML = {
+        const cls = `spellBtn ${locked ? 'locked' : ''} ${state}${key === 'fireball' && aiming ? ' aiming' : ''}${b === tutoHi ? ' tutoHi' : ''}`;
+        if (changed(b, 'c', cls)) b.className = cls;
+        setHTML(b.querySelector('.saction'), {
             locked: `🏗️ Bâtir · ${m.build}`, lockedPoor: `🏗️ Bâtir · ${m.build}`,
             cooling: `⏳ ${fmtLeft(cd)}`, full: '❤️ PV max', poor: `🪙 ${m.cost}`, ready: `✨ Lancer · ${m.cost}`,
-        }[state];
-        b.querySelector('.scd').textContent = state === 'cooling' ? (cd >= 60 ? fmtLeft(cd) : cd) : '';
-        b.style.setProperty('--cd', state === 'cooling' ? cd / m.cd : 0);
+        }[state]);
+        setText(b.querySelector('.scd'), state === 'cooling' ? (cd >= 60 ? fmtLeft(cd) : cd) : '');
+        const cdv = state === 'cooling' ? cd / m.cd : 0;
+        if (changed(b, 'cd', cdv)) b.style.setProperty('--cd', cdv);
         b.disabled = phase !== 'playing';
     }
     el('spellHint').style.display = anyBuilt ? 'none' : '';
     refreshSpellInfo();
     watchMageTowers(s);
     if (aiming && (kingDead || phase !== 'playing')) setAiming(false);
-    ui.kingFill.style.width = (kingDead ? 0 : kingHp) + '%';
-    ui.kingTxt.textContent = kingDead ? '👑 couronnement…' : `❤️ ${Math.round(kingHp / 100 * KING_HP)} / ${KING_HP}`;
-    ui.hpRed.style.width = (s.hp[0] / CASTLE_HP * 100) + '%';
-    ui.hpBlue.style.width = (s.hp[1] / CASTLE_HP * 100) + '%';
-    ui.hpRedTxt.textContent = s.hp[0];
-    ui.hpBlueTxt.textContent = s.hp[1];
+    setWidth(ui.kingFill, (kingDead ? 0 : kingHp) + '%');
+    setText(ui.kingTxt, kingDead ? '👑 couronnement…' : `❤️ ${Math.round(kingHp / 100 * KING_HP)} / ${KING_HP}`);
+    setWidth(ui.hpRed, (s.hp[0] / CASTLE_HP * 100).toFixed(1) + '%');
+    setWidth(ui.hpBlue, (s.hp[1] / CASTLE_HP * 100).toFixed(1) + '%');
+    setText(ui.hpRedTxt, s.hp[0]);
+    setText(ui.hpBlueTxt, s.hp[1]);
 
     if (phase === 'waiting') {
         ui.lobby.classList.add('show');
@@ -1794,9 +1927,34 @@ function drawMinimap() {
 // =====================================================================
 //  BOUCLE
 // =====================================================================
-let last = performance.now(), viewW = 0, viewH = 0, sendTimer = 0;
+let last = performance.now(), viewW = 0, viewH = 0, sendTimer = 0, mapTimer = 0, firstFrame = false;
+// outil de test (« ?perf » dans l'adresse) : les scripts de mesure accèdent ici aux entrailles du jeu
+if (new URLSearchParams(location.search).has('perf')) {
+    window.__perf = {
+        THREE, renderer, scene, camera, send, unitObjs, colliders, groundColliders, castRay, groundAt, unitGround, makeUnitModel, makePlayerModel, quality,
+        teleport(x, z) { pos.set(x, groundAt(x, 20, z), z); vy = 0; },
+        look(y, p, d) { yaw = y; pitch = p; camDistWanted = d; },
+    };
+}
 
-requestAnimationFrame(render);
+// Pré-compilation : pendant que le menu s'affiche, tous les effets (troupes, rois, dragons, projectiles) sont préparés
+// sans figer la page. Sinon, la première apparition de chaque troupe provoque un accroc le temps de compiler son effet.
+async function warmUp() {
+    const g = new THREE.Group();
+    for (const team of ['red', 'blue']) {
+        for (const type of ['infantry', 'archer', 'knight', 'cannon', 'catapult', 'ram']) g.add(makeUnitModel(type, team).root);
+        g.add(makePlayerModel(team).root, makeWarDragon(team).root);
+    }
+    g.add(arrowModel.clone(), new THREE.Mesh(stoneGeo, plastic('#8d939a', 0.6)), new THREE.Mesh(ballGeo, plastic('#1f2024', 0.3)),
+        new THREE.Mesh(fireballGeo, fireballMat), new THREE.Mesh(fireConeGeo, fireMatOuter), new THREE.Mesh(fireConeGeo, fireMatInner));
+    g.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+    scene.add(g);
+    try {
+        await Promise.race([renderer.compileAsync(scene, camera), new Promise(r => setTimeout(r, 8000))]);
+    } catch { /* la compilation se fera au fil de l'eau */ }
+    scene.remove(g);
+}
+warmUp().finally(() => requestAnimationFrame(render));
 
 function render(now) {
     if (canvas.clientWidth !== viewW || canvas.clientHeight !== viewH) {
@@ -1805,6 +1963,7 @@ function render(now) {
         camera.aspect = viewW / viewH;
         camera.updateProjectionMatrix();
     }
+    quality.frame((now - last) / 1000);
     const dt = THREE.MathUtils.clamp((now - last) / 1000, 0, 0.05);
     last = now;
     const t = now / 1000;
@@ -1879,7 +2038,8 @@ function render(now) {
     }
     flames.forEach((f, i) => f.scale.set(1, 0.85 + Math.sin(t * 17 + i * 3) * 0.15 + Math.sin(t * 7) * 0.05, 1));
 
-    drawMinimap();
+    if ((mapTimer -= dt) <= 0) { mapTimer = 1 / 15; drawMinimap(); }   // 15 fois par seconde suffit
     renderer.render(scene, camera);
+    if (!firstFrame) { firstFrame = true; performance.mark('frame1'); setTimeout(finishColliders, 50); }
     requestAnimationFrame(render);
 }

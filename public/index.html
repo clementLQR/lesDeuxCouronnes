@@ -198,6 +198,11 @@
         .tutoHi { outline: 4px solid #f6c21a !important; outline-offset: 3px; animation: tutoHi 1s ease-in-out infinite; }
         @keyframes tutoHi { 50% { outline-color: rgba(246, 194, 26, .25); } }
 
+        /* message quand le jeu ne peut pas démarrer (navigateur trop ancien, pas de 3D) */
+        #noGame { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; padding: 16px; background: #f6e7d2; }
+        #noGame[hidden] { display: none; }
+        #noGame .panel { max-width: 460px; text-align: center; font-size: 17px; }
+        #noGame h2 { margin: 4px 0 8px; }
         /* réglages du son, en haut à droite (aussi dans le menu) */
         #soundCtl { position: fixed; top: 16px; right: 16px; display: flex; gap: 8px; z-index: 6; }
         #soundCtl button {
@@ -563,16 +568,46 @@
             #minimap { width: 90px; height: 160px; bottom: 120px; }
         }
     </style>
+    <script>
+        // navigateur trop ancien pour les modules du jeu (import maps) : on prévient au lieu d'afficher une page figée
+        if (!(HTMLScriptElement.supports && HTMLScriptElement.supports('importmap'))) {
+            addEventListener('DOMContentLoaded', () => {
+                document.getElementById('noGame').hidden = false;
+                document.getElementById('noGameText').textContent = "Ton navigateur est un peu trop ancien pour ce jeu. " +
+                    "Mets-le à jour (Chrome, Firefox, Edge ou Safari récents) et reviens défendre ton royaume !";
+            });
+        }
+    </script>
     <script type="importmap">
         {
         "imports": {
             "three": "https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js",
-            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.186.1/examples/jsm/"
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.186.1/examples/jsm/",
+            "three-mesh-bvh": "https://cdn.jsdelivr.net/npm/three-mesh-bvh@0.9.15/build/index.module.js"
         }
         }
     </script>
+    <!-- tous les modules sont demandés d'un coup, au lieu de les découvrir l'un après l'autre (chargement plus rapide) -->
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+    <link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js">
+    <link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.core.js">
+    <link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/three-mesh-bvh@0.9.15/build/index.module.js">
+    <link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/three@0.186.1/examples/jsm/environments/RoomEnvironment.js">
+    <link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/three@0.186.1/examples/jsm/geometries/RoundedBoxGeometry.js">
+    <link rel="modulepreload" href="main.js">
+    <link rel="modulepreload" href="world.js">
+    <link rel="modulepreload" href="bake.js">
+    <link rel="modulepreload" href="collision.js">
+    <link rel="modulepreload" href="quality.js">
+    <link rel="modulepreload" href="audio.js">
 </head>
 <body data-team="red" class="menu">
+    <div id="noGame" hidden>
+        <div class="panel">
+            <h2>🏰 Oyez, oyez…</h2>
+            <p id="noGameText"></p>
+        </div>
+    </div>
     <canvas id="canvas"></canvas>
 
     <div id="bars">
@@ -603,6 +638,7 @@
     <div id="soundCtl">
         <button id="sfxBtn" title="Couper les bruitages">🔊</button>
         <button id="musicBtn" title="Couper la musique">🎵</button>
+        <button id="qualityBtn" title="Qualité de l'image">⚙️</button>
         <button id="shoutBtn" title="Cris rapides">📣</button>
     </div>
     <div id="shoutMenu" class="panel"></div>
@@ -698,7 +734,9 @@
                             fais bâtir canons, catapultes et béliers (touches <b>1</b> à <b>6</b>). Tes soldats quittent le château par le pont-levis.</li>
                         <li><b>⚔️ Chaque troupe a son ennemi juré.</b> Les lances des soldats transpercent les chevaliers, les chevaliers
                             taillent les archers en pièces, et les flèches des archers criblent les soldats. Le 🐏 bélier défonce le pont-levis
-                            (même levé) et les barricades, mais tremble devant les lances : protège-le !</li>
+                            (même levé) et les barricades, mais tremble devant les lances : protège-le ! Les boulets du 💣 canon explosent au milieu
+                            des troupes ennemies, et l'engin de siège 🪨 tire de plus loin que les tours : sors tes chevaliers pour l'abattre !
+                            Une armée variée vaut mieux qu'une armée d'une seule troupe.</li>
                         <li><b>🪙 Remplis ton coffre.</b> Ton royaume te verse de l'or chaque seconde, et chaque soldat ennemi vaincu
                             te rapporte la moitié de ce qu'il a coûté à son roi. Dépense-le avec sagesse !</li>
                         <li><b>👑 Le roi aussi se bat.</b> Ton roi brandit son arme (<b>F</b> ou clic). S'il tombe, pas de panique :

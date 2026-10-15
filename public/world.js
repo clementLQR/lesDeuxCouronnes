@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { bakeModel, cloneModel, simplify } from './bake.js';
 
 // =====================================================================
 //  Construction du monde : chambre, châteaux, figurines, engins de siège
@@ -220,6 +221,7 @@ function makeFlag(x, y, z, color, { map = null, pole: poleColor = null } = {}) {
     flag.userData.phase = Math.random() * 6;
     add(flag, { collide: false });
     flags.push(flag);
+    flag.userData.skip = true;            // il ondule : jamais fusionné
 }
 
 function roundedRectShape(w, h, r) {
@@ -838,6 +840,7 @@ function buildBedroom() {
         }
         add(mobile, { collide: false });
         spinners.push({ obj: mobile, speed: 0.06 });
+        mobile.userData.frame = true;
     }
 
     // ------------------------------------------------ mur de droite : fenêtre à rideaux et lit-château
@@ -1410,7 +1413,7 @@ export function animateFigure(f, amount, dt = 0) {
 }
 
 // --- les troupes de chaque camp (d'après la planche de personnages)
-function makeSoldier(type, team) {
+function makeSoldier(type, team, { plume = false, beard = false } = {}) {
     const F = FACTIONS[team];
     const lion = team === 'blue';
     const stand = F.stand;
@@ -1424,7 +1427,7 @@ function makeSoldier(type, team) {
         return makeFigure({
             tunic: F.tunic === '#b81d26' ? '#2a2a30' : F.tunic, emblem: F.emblem, emblemBorder: F.border,
             arms: F.armor, armsMetal: true, legs: F.armor, legsMetal: true, boots: F.armor,
-            helm: 'great', helmColor: F.armor, plume: Math.random() < 0.5 ? (lion ? '#1f5fbf' : '#d42330') : null,
+            helm: 'great', helmColor: F.armor, plume: plume ? (lion ? '#1f5fbf' : '#d42330') : null,
             shield, shieldSize: 1.15, weapon: 'sword', stand,
         });
     }
@@ -1432,12 +1435,31 @@ function makeSoldier(type, team) {
     return makeFigure({
         tunic: F.tunic, emblem: F.emblem, emblemBorder: F.border, legs: F.legs, arms: lion ? '#9aa0a8' : '#2a2a30',
         helm: 'nasal', helmColor: F.armor, shield, weapon: 'spear', stand,
-        beard: Math.random() < 0.4 ? '#6b4a2b' : null,
+        beard: beard ? '#6b4a2b' : null,
     });
 }
 
 // le joueur : le Roi (Lion) ou le Seigneur de guerre (Crâne)
+// Chaque modèle n'est construit (et fusionné, voir bake.js) qu'une fois par variante : les suivants en sont des copies
+// qui partagent géométries et matériaux. Former une troupe ne coûte presque rien, et rien ne fuit en mémoire.
+// lod : on prépare aussi une version allégée, pour les troupes vues de loin (model.low)
+const templates = new Map();
+function fromTemplate(key, build, { lod = false } = {}) {
+    let t = templates.get(key);
+    if (!t) {
+        t = { hi: bakeModel(build()) };
+        if (lod) { const lo = build(); simplify(lo.root); t.lo = bakeModel(lo); }
+        templates.set(key, t);
+    }
+    const m = cloneModel(t.hi);
+    if (t.lo) m.low = cloneModel(t.lo);
+    return m;
+}
+
 export function makePlayerModel(team) {
+    return fromTemplate('king' + team, () => buildPlayerModel(team));
+}
+function buildPlayerModel(team) {
     if (team === 'blue') {
         return makeFigure({
             tunic: '#1f5fbf', emblem: 'blueGold', emblemBorder: '#e8b923', arms: '#1f5fbf', legs: '#2a3a7a',
@@ -1453,10 +1475,14 @@ export function makePlayerModel(team) {
 }
 
 export function makeUnitModel(type, team) {
-    if (type === 'ram') return makeRam(team);
-    if (type === 'cannon') return makeCannon(team);
-    if (type === 'catapult') return makeCatapult(team);
-    return makeSoldier(type, team);
+    // un peu de variété : un chevalier sur deux porte un plumet, deux soldats sur cinq une barbe
+    const opts = { plume: type === 'knight' && Math.random() < 0.5, beard: type === 'infantry' && Math.random() < 0.4 };
+    return fromTemplate(`${type}|${team}|${opts.plume}|${opts.beard}`, () => {
+        if (type === 'ram') return makeRam(team);
+        if (type === 'cannon') return makeCannon(team);
+        if (type === 'catapult') return makeCatapult(team);
+        return makeSoldier(type, team, opts);
+    }, { lod: true });
 }
 
 // =====================================================================
@@ -1878,6 +1904,7 @@ function gateTorch(x, y, z, cupColor, ringColor) {
     flame.position.set(x, y + 0.6, z + 0.2);
     add(flame, { collide: false });
     flames.push(flame);
+    flame.userData.skip = true;
     const light = new THREE.PointLight('#ffb040', 2.5, 6, 1.6);
     light.position.set(x, y + 0.8, z + 0.75);
     PARENT.add(light);
@@ -2000,6 +2027,7 @@ function addDrawbridge(castle, { z, B, L, width = 3.3, chains = true }) {
         }
     }
     pivot.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+    pivot.userData.frame = true;          // le pont-levis pivote
     colliders.push(pivot);
     groundColliders.push(pivot);
 
@@ -2009,6 +2037,7 @@ function addDrawbridge(castle, { z, B, L, width = 3.3, chains = true }) {
         const g = new THREE.CylinderGeometry(0.05, 0.05, 1, 6);
         for (const x of [-(width / 2 - 0.15), width / 2 - 0.15]) {
             const c = new THREE.Mesh(g, metal('#4a4e55'));
+            c.userData.skip = true;
             c.castShadow = true;
             castle.group.add(c);
             const anchor = new THREE.Vector3(Math.sign(x) * (width / 2 + 0.35), B + L + 0.1, z - 0.1);
@@ -2163,6 +2192,7 @@ function addVault(castle, { cx, cz, r, angle, B, team }) {
 
     // tas de pièces au milieu (sa taille suit l'or de l'équipe)
     const pile = new THREE.Group();
+    pile.userData.frame = true;           // sa taille suit l'or
     pile.position.set(0, 0, -0.2);
     const MR = 0.55, MY = 0.5;                         // rayon et aplatissement du tas
     const mound = new THREE.Mesh(new THREE.SphereGeometry(MR, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2), metal('#c9971a'));
@@ -2218,6 +2248,7 @@ function addVault(castle, { cx, cz, r, angle, B, team }) {
         flame.position.set(x, 2.32, z);
         room.add(holder, flame);
         flames.push(flame);
+        flame.userData.skip = true;
     }
     const light = new THREE.PointLight('#ffbf6a', 5, 4.2, 1.4);
     light.position.set(0, VAULT_H - 0.7, 0);
@@ -2256,6 +2287,7 @@ function toyKit(castle, mat, rockMat, B, walkH, stairMat = mat) {
         m.rotation.y = rot;
         add(m);
         castle.merlons.push(m);
+        m.userData.merlon = true;         // dessinés en lot (voir makeBatch), un par un quand ils tombent
     };
     const merlonRow = (x0, z0, x1, z1, y) => {
         const len = Math.hypot(x1 - x0, z1 - z0);
@@ -2546,6 +2578,7 @@ function makeTent(team) {
     flag.userData.base = Float32Array.from(fg.attributes.position.array);
     flag.userData.phase = Math.random() * 6;
     flags.push(flag);
+    flag.userData.skip = true;            // il ondule : jamais fusionné
     g.add(pole, ball, flag);
     // entrée ouverte (vers +x) avec ses deux pans relevés
     const door = makeWindow(1.1, 1.55, { frame: COLORS.gold, inner: '#1b130c' });
@@ -2665,6 +2698,7 @@ function makeBrazier() {
     const flame = new THREE.Mesh(new THREE.ConeGeometry(0.3, 0.8, 14), new THREE.MeshStandardMaterial({ color: '#ffd23a', emissive: '#ff9a1a', emissiveIntensity: 2.4 }));
     flame.position.y = 1.55;
     flames.push(flame);
+    flame.userData.skip = true;
     g.add(bowl, coals, flame);
     return g;
 }
@@ -2689,6 +2723,7 @@ function makeCauldron() {
     const fire = new THREE.Mesh(new THREE.ConeGeometry(0.3, 0.45, 12), new THREE.MeshStandardMaterial({ color: '#ffd23a', emissive: '#ff8a1a', emissiveIntensity: 2.2 }));
     fire.position.y = 0.25;
     flames.push(fire);
+    fire.userData.skip = true;
     const chute = new THREE.Mesh(roundedBox(0.4, 0.08, 1.5, 0.03), iron);
     chute.position.set(0, 0.95, 0.95);
     chute.rotation.x = 0.35;
@@ -2704,12 +2739,14 @@ function defenseProps(castle, { B, C, top, towers, team }) {
         const a = t.safe - 1.1;
         b.position.set(t.x + Math.sin(a) * 1.3, t.floor, t.z + Math.cos(a) * 1.3);
         b.visible = false;
+        b.userData.frame = true;
         add(b, { collide: false });
         return b;
     });
     const cauldron = makeCauldron();
     cauldron.position.set(0, top, C - 0.45);
     cauldron.visible = false;
+    cauldron.userData.frame = true;
     add(cauldron, { collide: false });
 
     const { level1, level2 } = makeBarricades();
@@ -2717,12 +2754,14 @@ function defenseProps(castle, { B, C, top, towers, team }) {
     barricade.add(level1, level2);
     barricade.position.set(0, 0, BARRICADE_Z);
     barricade.visible = false;
+    for (const o of [barricade, level1, level2]) o.userData.frame = true;
     PARENT.add(barricade);
 
     const tent = makeTent(team), ruins = makeTentRuins(team);
     for (const o of [tent, ruins]) {
         o.position.set(TENT_POS[0], 0, TENT_POS[1]);
         o.visible = false;
+        o.userData.frame = true;
         PARENT.add(o);
     }
     castle.tentGroup = tent;
@@ -2874,6 +2913,7 @@ function mageTowers(castle, { team, mat }) {
         const t = makeMageTower(kind, team, mat);
         t.group.position.set(MAGE_POS[kind][0], 0, MAGE_POS[kind][1]);
         t.group.visible = false;
+        t.group.userData.frame = true;
         PARENT.add(t.group);
         towers[kind] = t;
     }
@@ -2894,6 +2934,9 @@ function mageTowers(castle, { team, mat }) {
 // Dragon Royal (Lion) : bleu, ventre crème à plaques, cornes, piques et griffes jaunes, ailes crème à armature bleue
 // Dragon des Ombres (Crâne) : corps rouge, tête, dos et dessus de queue noirs, ventre pêche, ailes orange à armature noire
 export function makeWarDragon(team) {
+    return fromTemplate('dragon' + team, () => buildWarDragon(team));
+}
+function buildWarDragon(team) {
     const royal = team === 'blue';
     const C = royal
         ? { body: '#2156d0', head: '#2156d0', back: '#2156d0', spots: '#3b72e8', belly: '#f3e2ad', plates: '#e3cc8a', horn: '#f5c21b',
@@ -3268,6 +3311,7 @@ export function buildToyCastle(team) {
     const guard = makeUnitModel('knight', team);
     guard.root.position.set(FR.x + Math.sin(FR.safe) * 1.2, FR.floor, FR.z + Math.cos(FR.safe) * 1.2);
     add(guard.root);
+    guard.root.userData.skip = true;      // figurine déjà fusionnée (makeUnitModel)
     castle.figures.push(guard);
     courtyardBuildings(castle, { B, mat, team, roof: '#a3171d', trim: stoneFrame, emblem: 'skull', border: '#1f1f24', wood: '#5a3a22' });
     add(courtyardProps(5.0, B, 0, -Math.PI / 2, { band: '#1e1f24', wood: '#6a4224', banner: 'skull' }));
@@ -3492,6 +3536,7 @@ export function buildLionCastle(team) {
     const guard = makeUnitModel('knight', team);
     guard.root.position.set(FR.x + Math.sin(FR.safe) * 1.2, FR.floor, FR.z + Math.cos(FR.safe) * 1.2);
     add(guard.root);
+    guard.root.userData.skip = true;      // figurine déjà fusionnée (makeUnitModel)
     castle.figures.push(guard);
     courtyardBuildings(castle, { B, mat, team, roof: '#1f5fbf', trim: relief, emblem: 'blueGold', border: '#e8b923', wood: '#8a5a2b' });
     add(courtyardProps(5.0, B, 0, -Math.PI / 2, { banner: 'blueGold' }));

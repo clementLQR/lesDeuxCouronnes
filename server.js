@@ -9,6 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
+const zlib = require('zlib');
 const { WebSocketServer } = require('ws');
 
 const PORT = process.env.PORT || 3000;
@@ -21,16 +22,46 @@ const MIME = {
     '.ico': 'image/x-icon',
 };
 
+// Fichiers du jeu : gardés en mémoire, déjà compressés (brotli / gzip : 4 à 5 fois plus légers à télécharger),
+// avec une empreinte (ETag). Le navigateur revérifie à chaque chargement (no-cache, pratique quand on modifie le code),
+// mais si rien n'a changé le serveur répond « 304 : rien de neuf » sans rien renvoyer.
+const files = new Map();       // chemin -> { mtimeMs, etag, raw, br, gz, type }
+const COMPRESS = new Set(['.html', '.js', '.css']);
+
+function loadFile(file, st) {
+    let f = files.get(file);
+    if (f && f.mtimeMs === st.mtimeMs && f.size === st.size) return f;
+    const raw = fs.readFileSync(file);
+    const ext = path.extname(file);
+    f = { mtimeMs: st.mtimeMs, size: st.size, raw, type: MIME[ext] || 'application/octet-stream',
+        etag: '"' + crypto.createHash('sha1').update(raw).digest('base64url').slice(0, 20) + '"' };
+    if (COMPRESS.has(ext)) {
+        f.br = zlib.brotliCompressSync(raw, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 10 } });
+        f.gz = zlib.gzipSync(raw, { level: 9 });
+    }
+    files.set(file, f);
+    return f;
+}
+
 const server = http.createServer((req, res) => {
-    let p = decodeURIComponent(req.url.split('?')[0]);
+    let p;
+    try { p = decodeURIComponent(req.url.split('?')[0]); } catch { res.writeHead(400); return res.end(); }
     if (p === '/') p = '/index.html';
     const file = path.normalize(path.join(PUBLIC, p));
-    if (!file.startsWith(PUBLIC)) { res.writeHead(403); return res.end(); }
-    fs.readFile(file, (err, data) => {
-        if (err) { res.writeHead(404); return res.end('404'); }
-        // no-cache : le navigateur revérifie les fichiers à chaque chargement (pratique quand on modifie le code)
-        res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
-        res.end(data);
+    if (!file.startsWith(PUBLIC + path.sep)) { res.writeHead(403); return res.end(); }
+    fs.stat(file, (err, st) => {
+        if (err || !st.isFile()) { res.writeHead(404); return res.end('404'); }
+        let f;
+        try { f = loadFile(file, st); } catch { res.writeHead(500); return res.end(); }
+        const headers = { 'Content-Type': f.type, 'Cache-Control': 'no-cache', ETag: f.etag, Vary: 'Accept-Encoding' };
+        if (req.headers['if-none-match'] === f.etag) { res.writeHead(304, headers); return res.end(); }
+        const accept = req.headers['accept-encoding'] || '';
+        let body = f.raw;
+        if (f.br && /\bbr\b/.test(accept)) { body = f.br; headers['Content-Encoding'] = 'br'; }
+        else if (f.gz && /\bgzip\b/.test(accept)) { body = f.gz; headers['Content-Encoding'] = 'gzip'; }
+        headers['Content-Length'] = body.length;
+        res.writeHead(200, headers);
+        res.end(req.method === 'HEAD' ? undefined : body);
     });
 });
 
@@ -38,22 +69,28 @@ const server = http.createServer((req, res) => {
 // ---------------------------------------------------------------- règles du jeu
 // troupes de la planche : soldats, archers, chevaliers, canon, engin de siège
 // prime = 50 % du coût : abattre l'ennemi aide, mais ne suffit pas à s'enrichir ; chaque troupe
-// se forme dans un bâtiment (une file de 5 maximum par bâtiment), ce qui limite le rythme
+// se forme dans un bâtiment (une file de 5 maximum par bâtiment), ce qui limite le rythme.
+// Équilibrage mesuré avec tools/sim.js (combats à or égal, sièges, parties IA contre IA) :
+// à prix égal, chaque troupe bat celle qu'elle contre, et une armée variée bat les armées d'un seul type.
 const UNITS = {
-    infantry: { name: 'Soldats',        icon: '🔱', cost: 25,  bounty: 13,  train: 3,  building: 'barracks', hp: 90,  speed: 2.3, dmg: 10, castleDmg: 6,  range: 1.8, cd: 0.9, aggro: 6, targetsUnits: true,  radius: 0.4 },
-    archer:   { name: 'Archers',        icon: '🏹', cost: 45,  bounty: 23,  train: 5,  building: 'barracks', hp: 60,  speed: 2.0, dmg: 9,  castleDmg: 5,  range: 9,   cd: 1.4, aggro: 9, targetsUnits: true,  radius: 0.4, ranged: 'arrow' },
-    knight:   { name: 'Chevalier',      icon: '🛡️', cost: 70,  bounty: 35,  train: 6,  building: 'barracks', hp: 220, speed: 2.0, dmg: 20, castleDmg: 10, range: 1.4, cd: 1.1, aggro: 7, targetsUnits: true,  radius: 0.45 },
-    cannon:   { name: 'Canon',          icon: '💣', cost: 150, bounty: 75,  train: 9,  building: 'workshop', hp: 240, speed: 1.2, dmg: 0,  castleDmg: 55, range: 14,  cd: 3.5, aggro: 0, targetsUnits: false, radius: 1.0, ranged: 'ball' },
-    catapult: { name: 'Engin de siège', icon: '🪨', cost: 200, bounty: 100, train: 10, building: 'workshop', hp: 180, speed: 1.1, dmg: 0,  castleDmg: 70, range: 30,  cd: 5.0, aggro: 0, targetsUnits: false, radius: 1.1, ranged: 'stone' },
+    infantry: { name: 'Soldats',        icon: '🔱', cost: 25,  bounty: 13,  train: 3,  building: 'barracks', hp: 72,  speed: 2.3, dmg: 8,  castleDmg: 4,  range: 1.8, cd: 0.9, aggro: 6, targetsUnits: true,  radius: 0.4 },
+    archer:   { name: 'Archers',        icon: '🏹', cost: 35,  bounty: 18,  train: 4,  building: 'barracks', hp: 75,  speed: 2.0, dmg: 12, castleDmg: 3,  range: 10,  cd: 1.2, aggro: 10, targetsUnits: true, radius: 0.4, ranged: 'arrow' },
+    knight:   { name: 'Chevalier',      icon: '🛡️', cost: 65,  bounty: 33,  train: 6,  building: 'barracks', hp: 230, speed: 2.0, dmg: 20, castleDmg: 7,  range: 1.4, cd: 1.1, aggro: 7, targetsUnits: true,  radius: 0.45 },
+    // le canon tire ses boulets sur les paquets de troupes ennemies (dégâts de zone), sinon sur le château
+    cannon:   { name: 'Canon',          icon: '💣', cost: 150, bounty: 75,  train: 9,  building: 'workshop', hp: 220, speed: 1.2, dmg: 0,  castleDmg: 45, range: 14,  cd: 3.5, aggro: 0, targetsUnits: false, radius: 1.0, ranged: 'ball',
+        splash: { range: 13, r: 2.0, dmg: 22 } },
+    // l'engin de siège tire de plus loin que les tours : on le contre en sortant des troupes, ou par la magie
+    catapult: { name: 'Engin de siège', icon: '🪨', cost: 200, bounty: 100, train: 10, building: 'workshop', hp: 180, speed: 1.1, dmg: 0,  castleDmg: 70, range: 23,  cd: 5.0, aggro: 0, targetsUnits: false, radius: 1.1, ranged: 'stone' },
     // le bélier fonce sur le pont-levis et frappe fort, même pont levé ; il ne se défend pas et craint les lances
-    ram:      { name: 'Bélier',         icon: '🐏', cost: 160, bounty: 80,  train: 8,  building: 'workshop', hp: 260, speed: 1.5, dmg: 0,  castleDmg: 90, range: 1.6, cd: 2.8, aggro: 0, targetsUnits: false, radius: 1.0 },
+    ram:      { name: 'Bélier',         icon: '🐏', cost: 160, bounty: 80,  train: 8,  building: 'workshop', hp: 300, speed: 1.5, dmg: 0,  castleDmg: 65, range: 1.6, cd: 2.8, aggro: 0, targetsUnits: false, radius: 1.0 },
 };
 // forces et faiblesses (multiplicateur des dégâts infligés) : les lances battent les chevaliers (et le bélier),
-// les chevaliers battent les archers, les archers battent les soldats
+// les chevaliers battent les archers, les archers battent les soldats. Assez marqué pour compter, pas au point
+// de tout décider : une armée variée l'emporte sur une armée d'un seul type.
 const COUNTERS = {
-    infantry: { knight: 2.5, ram: 3 },
-    knight:   { archer: 2, infantry: 0.7 },
-    archer:   { infantry: 2, knight: 0.6 },
+    infantry: { knight: 1.7, ram: 3 },
+    knight:   { archer: 1.7, infantry: 0.8 },
+    archer:   { infantry: 1.7, knight: 0.75 },
 };
 const counter = (att, def) => COUNTERS[att]?.[def] ?? 1;
 const TYPES = Object.keys(UNITS);
@@ -62,6 +99,9 @@ const BUILDING_NAMES = ['barracks', 'workshop', 'tent'];
 const CASTLE_HP = Number(process.env.CASTLE_HP) || 2500;   // CASTLE_HP=200 npm start : parties de test rapides
 const START_GOLD = Number(process.env.START_GOLD) || 300;   // START_GOLD=3000 npm start : tester les achats
 const INCOME = 10;           // or par seconde
+// une partie qui s'éternise s'emballe : passé 12 minutes, les revenus grimpent par paliers (les armées finissent par l'emporter sur les murs)
+const RICHES = [[12 * 60, 1.2, '🪙 Les coffres des royaumes se remplissent : les revenus augmentent !'],
+    [17 * 60, 1.4, "🪙🪙 La guerre s'éternise : les revenus augmentent encore !"], [22 * 60, 1.6, '🪙🪙🪙 Trésors de guerre : les revenus sont au plus haut !']];
 const MAX_UNITS = 40;        // par équipe (troupes en vie + en formation)
 const QUEUE_MAX = 5;         // par bâtiment
 const TICK = 0.05;           // 20 Hz
@@ -95,13 +135,16 @@ const GATE_FRONT_Z = 7.8;      // au-delà, on est dehors, devant la façade
 // chacune débloque un sort qui coûte de l'or à chaque lancer et a son temps de recharge
 const MAGES = {
     potion:   { tower: "Tour de l'Alchimiste", spell: 'Potion de vie', icon: '🧪', key: 'R', build: 250, cost: 60,  cd: 30,  heal: 150, pos: [-6, -15.5] },
-    fireball: { tower: 'Tour du Pyromancien',  spell: 'Boule de feu',  icon: '☄️', key: 'T', build: 350, cost: 90,  cd: 14,  radius: 3.5, dmg: 90, structDmg: 150, pos: [6, -15.5] },
+    fireball: { tower: 'Tour du Pyromancien',  spell: 'Boule de feu',  icon: '☄️', key: 'T', build: 350, cost: 90,  cd: 16,  radius: 3, dmg: 55, structDmg: 150, pos: [6, -15.5] },
     dragon:   { tower: "Tour de l'Invocateur", spell: 'Dragon',        icon: '🐉', key: 'Y', build: 1200, cost: 500, cd: 300, duration: 18, radius: 3.6, speed: 8, pos: [0, -17.5] },
 };
 const MAGE_KEYS = Object.keys(MAGES);
 const MAGE_TOP = 11.5;         // hauteur d'où partent les sorts (balcon des tours de mage)
 const DRAGON_Y = 8;
 const PLAYER_DMG = 30, PLAYER_CD = 0.45;
+// dernier rempart : sous 40 % de ses PV, un château se défend avec l'énergie du désespoir
+// (tours qui tirent plus vite) : la fin d'un siège demande un vrai assaut, et le royaume en difficulté peut se reprendre
+const LAST_STAND = { below: 0.4, cd: 0.75, range: 0 };
 const KING_HP = 300, KING_BOUNTY = 100, RESPAWN = 5, BOT_SPEED = 4;
 // le roi porte une armure royale : flèches des tours et huile bouillante ne lui font qu'une partie de leurs dégâts
 const KING_ARMOR = 0.35;
@@ -185,6 +228,7 @@ function newGame(phase = 'waiting') {
         aiTimer: { red: 0, blue: 0 },
         towerCd: { red: 0, blue: 0 },
         towerSide: { red: 1, blue: 1 },
+        lastStand: { red: false, blue: false },
         def: { red: { towers: 0, oil: 0, barricade: 0, tent: 0 }, blue: { towers: 0, oil: 0, barricade: 0, tent: 0 } },
         defHp: { red: { barricade: 0, tent: 0 }, blue: { barricade: 0, tent: 0 } },
         defCd: { red: { barricade: 0, tent: 0 }, blue: { barricade: 0, tent: 0 } },   // délai avant reconstruction
@@ -197,6 +241,11 @@ function newGame(phase = 'waiting') {
         pending: [],                             // projectiles en vol
         nextUnitId: 1,
         startedAt: Date.now(),
+        clock: 0,                                // secondes de jeu écoulées
+        riches: 0,                               // paliers de revenus atteints (RICHES)
+        aiSave: { red: null, blue: null },       // tour de mage pour laquelle l'IA met de l'or de côté
+        aiDefSave: { red: null, blue: null },    // prix de la défense pour laquelle l'IA assiégée économise
+        aiRelease: { red: false, blue: false },  // l'IA vient de baisser son pont-levis pour lâcher une vague
         peace: false,                            // partie guidée : l'IA attend la fin de la leçon
         // statistiques affichées à la fin : par royaume
         stats: { red: newStats(), blue: newStats() },
@@ -291,6 +340,32 @@ function damageCastle(team, dmg) {
         game.broken[team] = true;
         game.door[team] = true;
         broadcast({ t: 'msg', text: `💥 Crac ! Les chaînes du pont-levis ${team === 'red' ? 'du Crâne' : 'du Lion'} ont cassé : il ne pourra plus jamais se relever !` });
+    }
+}
+
+// cible d'un canon : un ennemi à portée hors de sa cour ; pour tirer (best), celui qui a le plus de voisins
+// dans le rayon de l'explosion
+function artilleryTarget(u, s, best) {
+    const sp = s.splash, enemy = enemyOf(u.team);
+    let pick = null, score = -1;
+    for (const o of game.units) {
+        if (o.team === u.team || o.hp <= 0 || o.inside || isInCastle(enemy, o.x, o.z)) continue;
+        if (Math.hypot(o.x - u.x, o.z - u.z) > sp.range) continue;
+        if (!best) return o;
+        let n = 0;
+        for (const q of game.units) if (q.team === o.team && q.hp > 0 && Math.hypot(q.x - o.x, q.z - o.z) < sp.r) n++;
+        if (n > score) { score = n; pick = o; }
+    }
+    return pick;
+}
+// boulet qui touche le sol : toutes les troupes ennemies (et le roi) dans le rayon ; les engins encaissent mieux
+function splashHit({ x, z, team, r }, dmg, byTeam) {
+    for (const u of game.units) {
+        if (u.team !== team || u.hp <= 0 || u.inside) continue;
+        if (Math.hypot(u.x - x, u.z - z) < r + UNITS[u.type].radius * 0.5) damageUnit(u, UNITS[u.type].targetsUnits ? dmg : dmg * 0.5, byTeam);
+    }
+    for (const p of players.values()) {
+        if (p.team === team && !p.dead && p.y < 3 && Math.hypot(p.x - x, p.z - z) < r) damagePlayer(p, dmg, byTeam);
     }
 }
 
@@ -552,20 +627,26 @@ function updateDragons(dt) {
 
 // l'IA bâtit ses tours de mage quand elle est riche, et lance ses sorts quand ça vaut le coup
 function aiMagic(team) {
-    const order = game.level === 'hard' ? ['potion', 'fireball', 'dragon'] : ['potion', 'fireball'];
-    for (const key of order) {
-        if (!game.mage[team][key]) {
-            if (game.gold[team] >= MAGES[key].build + 150 && Math.random() < 0.25) return buildMage(team, key);
-            break;
-        }
+    const order = game.level === 'hard' ? ['fireball', 'potion', 'dragon'] : ['fireball', 'potion'];
+    // après les premières minutes, l'IA met de l'or de côté pour sa prochaine tour de mage (sauf si on l'assiège)
+    game.aiSave[team] = null;
+    const key = order.find(k => !game.mage[team][k]);
+    const firstAt = game.level === 'hard' ? 100 : 160;
+    if (key && game.clock > firstAt + order.indexOf(key) * 120 && !underThreat(team)) {
+        if (game.gold[team] >= MAGES[key].build) return buildMage(team, key);
+        game.aiSave[team] = key;
     }
     const bot = [...players.values()].find(p => p.bot && p.team === team && !p.dead);
     if (!bot) return false;
     const enemyUnits = game.units.filter(u => u.team !== team && !u.inside);
     if (bot.hp < KING_HP * 0.5 && castSpell(bot, 'potion')) return true;
     if (game.mage[team].dragon && enemyUnits.length >= 6 && game.gold[team] >= MAGES.dragon.cost + 100 && castSpell(bot, 'dragon')) return true;
-    if (game.mage[team].fireball && enemyUnits.length && game.gold[team] >= MAGES.fireball.cost + 60) {
-        // vise l'ennemi qui a le plus de voisins
+    if (game.mage[team].fireball && enemyUnits.length && game.gold[team] >= MAGES.fireball.cost + 30) {
+        // un engin de siège qui pilonne le château : cible prioritaire
+        const gate = toWorld(team, 0, 0, 9);
+        const engine = enemyUnits.find(u => (u.type === 'catapult' || u.type === 'cannon') && Math.hypot(u.x - gate[0], u.z - gate[2]) < 28);
+        if (engine) return castSpell(bot, 'fireball', engine.x, engine.z);
+        // sinon, l'ennemi qui a le plus de voisins
         let best = null, n = 1;
         for (const u of enemyUnits) {
             const k = enemyUnits.filter(o => Math.hypot(o.x - u.x, o.z - u.z) < MAGES.fireball.radius).length;
@@ -664,26 +745,43 @@ function updateAI(team, dt) {
         const count = {};
         for (const u of enemyUnits) count[u.type] = (count[u.type] || 0) + 1;
         const main = Object.keys(count).sort((a, b) => count[b] - count[a])[0];
-        const beats = { knight: 'infantry', ram: 'infantry', archer: 'knight', infantry: 'archer' }[main];
+        const beats = { knight: 'infantry', ram: 'infantry', archer: 'knight', infantry: 'archer', cannon: 'knight', catapult: 'knight' }[main];
+        const foe = game.def[enemyOf(team)];
+        const fortified = foe.towers + foe.oil + foe.barricade >= 2;
         if (threat > 0 && melee < threat * 3) game.aiPlan[team] = Math.random() < 0.5 ? 'knight' : 'infantry';
+        else if ((count.infantry || 0) >= 6 && Math.random() < 0.4) game.aiPlan[team] = 'cannon';     // boulets contre la foule
         else if (beats && count[main] >= 3 && Math.random() < 0.6) game.aiPlan[team] = beats;
+        else if (fortified && Math.random() < 0.3) game.aiPlan[team] = 'catapult';                  // château fortifié : on tire de loin
         else if (!game.door[enemyOf(team)] && !game.broken[enemyOf(team)] && Math.random() < 0.35) game.aiPlan[team] = 'ram';
         else {
             const r = Math.random();
             game.aiPlan[team] = r < 0.28 ? 'infantry' : r < 0.48 ? 'archer' : r < 0.68 ? 'knight' : r < 0.8 ? 'cannon' : r < 0.9 ? 'catapult' : 'ram';
         }
     }
+    // on garde l'or pour la tour de mage, sauf s'il en reste largement
+    if (game.aiSave[team] && game.gold[team] < MAGES[game.aiSave[team]].build + UNITS[game.aiPlan[team]].cost) return;
+    if (game.aiDefSave[team] && game.gold[team] < game.aiDefSave[team] + UNITS[game.aiPlan[team]].cost) return;
     if (enqueue(team, game.aiPlan[team])) game.aiPlan[team] = null;
+}
+
+// des ennemis se pressent devant notre porte ?
+function underThreat(team, n = 4) {
+    const gate = toWorld(team, 0, 0, 9);
+    return game.units.filter(u => u.team !== team && Math.hypot(u.x - gate[0], u.z - gate[2]) < 22).length >= n;
 }
 
 // sous la menace (ennemis près de la porte) l'IA renforce sa défense ; sinon elle investit de temps en temps
 function aiDefense(team) {
     const gate = toWorld(team, 0, 0, 9);
     const near = game.units.filter(u => u.team !== team && Math.hypot(u.x - gate[0], u.z - gate[2]) < 20).length;
-    const wish = near >= 3 ? ['barricade', 'oil', 'towers'] : Math.random() < 0.12 ? ['tent', 'towers', 'barricade', 'oil'] : [];
+    // assiégée, l'IA met de l'or de côté pour l'huile bouillante (la défense qui disperse les foules devant la porte)
+    game.aiDefSave[team] = null;
+    const wish = near >= 3 ? ['oil', 'barricade', 'towers'] : Math.random() < 0.12 ? ['tent', 'towers', 'barricade', 'oil'] : [];
     for (const key of wish) {
         const next = DEFENSES[key].levels[game.def[team][key] + 1];
-        if (next && game.gold[team] >= next.cost + 60 && !game.defCd[team][key]) return buyDefense(team, key);
+        if (!next || game.defCd[team][key]) continue;
+        if (game.gold[team] >= next.cost + (near >= 3 ? 0 : 60)) return buyDefense(team, key);
+        if (near >= 5) { game.aiDefSave[team] = next.cost; break; }
     }
     return false;
 }
@@ -721,8 +819,19 @@ function updateBot(b, dt) {
     const dist = o => Math.hypot(o.x - b.x, o.z - b.z);
     const foe = [...players.values()].filter(p => p.team === enemy && !p.dead).sort((a, c) => dist(a) - dist(c))[0];
     const gate = toWorld(team, 0, 0, 9);
-    // pont-levis levé quand le roi ennemi approche (tant qu'il n'a pas cédé)
-    if (!game.broken[team] && LEVELS[game.level].door) game.door[team] = !(foe && Math.hypot(foe.x - gate[0], foe.z - gate[2]) < 12);
+    // pont-levis levé quand le roi ennemi approche (tant qu'il n'a pas cédé) ; face à une armée massée devant la porte,
+    // l'IA garde ses troupes à l'abri le temps d'en réunir assez, puis les lâche toutes ensemble
+    if (!game.broken[team] && LEVELS[game.level].door) {
+        const kingNear = foe && Math.hypot(foe.x - gate[0], foe.z - gate[2]) < 12;
+        const near = (u, r) => Math.hypot(u.x - gate[0], u.z - gate[2]) < r;
+        const foes = game.units.filter(u => u.team === enemy && near(u, 15)).length;
+        const waiting = game.units.filter(u => u.team === team && u.inside).length;
+        const outside = game.units.filter(u => u.team === team && !u.inside && near(u, 16)).length;
+        if (game.aiRelease[team] && waiting === 0) game.aiRelease[team] = false;
+        if (!game.aiRelease[team] && foes >= 4 && outside < foes * 0.6 && waiting >= Math.min(7, foes)) game.aiRelease[team] = true;
+        const hold = foes >= 4 && outside < foes * 0.6 && !game.aiRelease[team];
+        game.door[team] = !(kingNear || hold);
+    }
 
     let goal = null, chasing = false;
     if (foe && isInCastle(team, foe.x, foe.z)) { goal = [foe.x, foe.z]; chasing = true; b.route = null; }
@@ -776,8 +885,10 @@ function waypointReached(u, l) {
 function step(dt) {
     syncBots();
     if (game.phase === 'playing') {
+        game.clock += dt;
+        while (game.riches < RICHES.length && game.clock >= RICHES[game.riches][0]) broadcast({ t: 'msg', text: RICHES[game.riches++][2] });
         for (const t of TEAMS) {
-            earn(t, INCOME * dt * (game.ai[t] ? LEVELS[game.level].income : 1));
+            earn(t, INCOME * (game.riches ? RICHES[game.riches - 1][1] : 1) * dt * (game.ai[t] ? LEVELS[game.level].income : 1));
             if (game.ai[t]) updateAI(t, dt);
         }
         trainUnits(dt);
@@ -827,7 +938,7 @@ function step(dt) {
             if (Math.hypot(target.x - anchor[0], target.z - anchor[1]) > (king ? LEASH.follow : LEASH.defend)) target = null;
         }
 
-        let goal = null, ordered = false, siegeAim = null;
+        let goal = null, ordered = false, siegeAim = null, gun = null;
         if (target) {
             const reach = s.range + (isKing ? 0.3 : isTent ? 0.2 : UNITS[target.type].radius * 0.6);
             if (best > reach) goal = [target.x, target.z];
@@ -848,6 +959,16 @@ function step(dt) {
                         fx.push(mult >= 2 ? { k: 'melee', id: u.id, crit: 1, p: [r2(target.x), 1, r2(target.z)] } : { k: 'melee', id: u.id });
                     }
                 }
+            }
+        } else if (s.splash && !u.inside && (gun = artilleryTarget(u, s, u.cd <= 0))) {
+            // 1 bis. canon : boulet explosif sur le paquet de troupes ennemies le plus serré à portée
+            u.state = 1;
+            u.rot = Math.atan2(gun.x - u.x, gun.z - u.z);
+            if (u.cd <= 0 && game.phase === 'playing') {
+                u.cd = s.cd;
+                const from = [u.x + Math.sin(u.rot) * 1.1, 1.0, u.z + Math.cos(u.rot) * 1.1];
+                shoot('ball', from, [gun.x, 0.3, gun.z], s.splash.dmg, { splash: { x: gun.x, z: gun.z, team: enemy, r: s.splash.r } }, u.team);
+                fx.push({ k: 'fire', id: u.id });
             }
         } else if (u.inside) {
             // 2. sortie du château : rassemblement derrière la porte, puis passage du pont-levis s'il est baissé
@@ -971,7 +1092,13 @@ function step(dt) {
     if (game.phase === 'playing') {
         for (const t of TEAMS) {
             // défense des tours : flèches sur les troupes ennemies proches de la porte, sinon sur le roi ennemi
-            const tw = DEFENSES.towers.levels[game.def[t].towers];
+            const tw0 = DEFENSES.towers.levels[game.def[t].towers];
+            const stand = game.hp[t] < CASTLE_HP * LAST_STAND.below && !game.broken[t];
+            const tw = stand ? { ...tw0, cd: tw0.cd * LAST_STAND.cd, range: tw0.range + LAST_STAND.range } : tw0;
+            if (stand && !game.lastStand[t]) {
+                game.lastStand[t] = true;
+                broadcast({ t: 'msg', text: `🛡️ Le château ${whoOf(t)} est en danger : ses défenseurs redoublent d'ardeur, les tours tirent plus vite !` });
+            }
             game.towerCd[t] -= dt;
             if (game.towerCd[t] <= 0) {
                 const gate = toWorld(t, 0, 0, 9);
@@ -1022,6 +1149,7 @@ function step(dt) {
             const pl = players.get(p.target.player);
             if (pl) damagePlayer(pl, p.dmg, p.attacker);
         } else if (p.target.aoe) fireballHit(p.target.aoe);
+        else if (p.target.splash) splashHit(p.target.splash, p.dmg, p.attacker);
         else if (p.target.def) damageDefense(p.target.team, p.target.def, p.dmg, p.attacker);
         else if (p.target.castle) damageCastle(p.target.castle, p.dmg);
     }
@@ -1273,7 +1401,16 @@ function leaveRoom(room, id) {
     }
 }
 
-const wss = new WebSocketServer({ server });
+// compression des messages (permessage-deflate) : les instantanés envoyés 20 fois par seconde se ressemblent beaucoup
+// d'un envoi à l'autre, ils se compressent très bien (moins de données pour les connexions lentes et pour l'hébergeur)
+const wss = new WebSocketServer({
+    server,
+    perMessageDeflate: {
+        zlibDeflateOptions: { level: 3, memLevel: 7 },
+        threshold: 256,                    // les tout petits messages partent tels quels
+        clientNoContextTakeover: true,     // les messages des joueurs sont minuscules : on épargne leur mémoire
+    },
+});
 wss.on('connection', ws => {
     let room = null, id = null;
     visitors.add(ws);

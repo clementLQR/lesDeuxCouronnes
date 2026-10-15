@@ -14,7 +14,10 @@ Jeu 3D dans le navigateur, réalisé avec [Three.js](https://threejs.org/) et un
 - **Le roi aussi se bat** (`F` ou clic). S'il tombe, un nouveau roi est couronné dans la cour 5 secondes plus tard.
 - **Le pont-levis** (`E`) : le lever protège ton trésor, mais tes soldats restent enfermés.
 - **Les ordres** : toute l'armée obéit à un même ordre. ⚔️ **Attaquer** (`V`) : marcher sur le château ennemi ; 🛡️ **Défendre** (`B`) : tenir la ligne devant son pont-levis, sous l'étendard ; 👑 **Suivre le roi** (`N`) : escorter son roi, en passant par les portes, jusque dans le château adverse.
-- **Forces et faiblesses** : les lances des soldats battent les chevaliers (dégâts ×2,5) et le bélier (×3), les chevaliers battent les archers (×2), les archers battent les soldats (×2). À l'inverse, les chevaliers frappent moins fort les soldats (×0,7) et les flèches rebondissent sur leur armure (×0,6).
+- **Forces et faiblesses** : les lances des soldats battent les chevaliers (dégâts ×1,7) et le bélier (×3), les chevaliers battent les archers (×1,7), les archers battent les soldats (×1,7). À l'inverse, les chevaliers frappent moins fort les soldats (×0,8) et les flèches rebondissent sur leur armure (×0,75). À prix égal, chaque troupe bat celle qu'elle contre, et une armée variée bat une armée d'un seul type.
+- **Les engins** : les boulets du canon explosent au milieu des troupes ennemies (dégâts de zone), sinon il tire sur le château ; l'engin de siège tire de plus loin que les tours (il faut sortir pour l'abattre) ; le bélier frappe le pont-levis même levé.
+- **Dernier rempart** : sous 40 % de ses PV, un château se défend avec l'énergie du désespoir : ses tours tirent plus vite.
+- **La guerre s'éternise ?** Passé 12 minutes, les revenus montent par paliers (+20 %, +40 %, puis +60 % à 22 minutes).
 - **Les défenses** (touches `7`, `8`, `9` et `0`) : renforcer ses tours, chauffer l'huile, dresser des barricades ou un chapiteau hors les murs. Tenir un siège devient possible… mais les canons ennemis finissent toujours par user les murs.
 - **L'armure royale** : flèches des tours et huile bouillante ne font qu'un tiers environ de leurs dégâts à un roi, qui peut ainsi foncer jusqu'au trésor.
 - **La victoire** : un château à 0 PV voit son pont-levis céder pour de bon. Le premier roi qui entre dans la salle au trésor adverse gagne.
@@ -22,8 +25,8 @@ Jeu 3D dans le navigateur, réalisé avec [Three.js](https://threejs.org/) et un
 | Troupe | Coût | Prime | Formation |
 |---|---|---|---|
 | Soldats | 25 | 13 | 3 s |
-| Archers | 45 | 23 | 5 s |
-| Chevalier | 70 | 35 | 6 s |
+| Archers | 35 | 18 | 4 s |
+| Chevalier | 65 | 33 | 6 s |
 | Canon | 150 | 75 | 9 s |
 | Engin de siège | 200 | 100 | 10 s |
 | 🐏 Bélier | 160 | 80 | 8 s |
@@ -41,7 +44,7 @@ Jeu 3D dans le navigateur, réalisé avec [Three.js](https://threejs.org/) et un
 | Tour (prix) | Sort (touche) | Coût | Recharge | Effet |
 |---|---|---|---|---|
 | Alchimiste (250) | 🧪 Potion de vie (`R`) | 60 | 30 s | Rend 150 PV au roi. |
-| Pyromancien (350) | ☄️ Boule de feu (`T`) | 90 | 14 s | On vise le champ de bataille à la souris : elle brûle les troupes et les obstacles ennemis (barricades, chapiteau). |
+| Pyromancien (350) | ☄️ Boule de feu (`T`) | 90 | 16 s | On vise le champ de bataille à la souris : elle brûle les troupes et les obstacles ennemis (barricades, chapiteau). |
 | Invocateur (1200) | 🐉 Dragon (`Y`) | 500 | 5 min | Le dragon du royaume (Dragon Royal pour le Lion, Dragon des Ombres pour le Crâne) survole le terrain pendant 18 s, chasse les troupes ennemies et réduit en cendres toutes celles qu'il survole hors de leur château (la cour adverse reste à l'abri). Il ne touche à aucune construction, et ses victimes ne rapportent pas d'or. |
 
 **Commandes** : `ZQSD` / flèches pour marcher, `Maj` pour courir, `Espace` pour sauter, glisser la souris pour tourner la caméra, molette pour zoomer.
@@ -55,6 +58,8 @@ Jeu 3D dans le navigateur, réalisé avec [Three.js](https://threejs.org/) et un
 **Fin de partie** : un tableau compare les deux royaumes (troupes formées, abattues et perdues, or gagné, dégâts au château, sorts, constructions, rois tombés) et donne la durée de la bataille.
 
 **Son** : bruitages et musique de boîte à musique sont synthétisés en direct dans le navigateur (aucun fichier audio). Les boutons 🔊 et 🎵, en haut à droite, coupent les bruitages ou la musique ; le choix est mémorisé.
+
+**Qualité de l'image** : le bouton ⚙️ choisit entre *Auto* (par défaut : la définition de l'image s'adapte toute seule à l'appareil pour rester fluide), *Belle*, *Équilibrée* et *Rapide* (pour les petits appareils : sans ombres ni lumières des torches). Le choix est mémorisé.
 
 ## Modes de jeu
 
@@ -95,3 +100,27 @@ Le projet contient un fichier [`render.yaml`](render.yaml).
 | `public/main.js` | Client : connexion, joueur, caméra, affichage des troupes, effets, menu. |
 | `public/world.js` | Construction du monde 3D : chambre, châteaux, figurines, engins de siège. |
 | `public/audio.js` | Sons et musique synthétisés (Web Audio API), atténués selon la distance. |
+| `public/bake.js` | Fusion des pièces immobiles (décor, figurines) pour dessiner moins d'objets ; versions allégées des troupes vues de loin. |
+| `public/collision.js` | Collisions rapides : décor immobile réuni dans un arbre de recherche ([three-mesh-bvh](https://github.com/gkjohnson/three-mesh-bvh)). |
+| `public/quality.js` | Qualité de l'image adaptée à l'appareil (définition, ombres). |
+
+## Équilibrage
+
+Les règles sont réglées avec un simulateur qui fait tourner la vraie logique du serveur en accéléré (sans navigateur) :
+
+```bash
+node tools/sim.js games normal 30   # 30 parties IA contre IA (durées, victoires, dépenses)
+node tools/sim.js duels 600 16      # combats à or égal entre troupes, en plein champ
+node tools/sim.js siege             # temps pour briser un château selon l'engin et les défenses
+```
+
+Repères actuels : à or égal, chaque troupe bat celle qu'elle contre et une armée variée l'emporte ; aucune arme de siège ne gagne seule contre toutes les défenses ; une partie IA normale contre IA normale dure une quinzaine de minutes, sans blocage.
+
+## Performances
+
+Le jeu doit tourner aussi sur un vieux portable ou une tablette :
+- **moins d'objets à dessiner** : au chargement, les milliers de petites pièces immobiles du décor sont fusionnées par matériau ; chaque modèle de troupe n'est construit qu'une fois, puis copié ; les troupes lointaines utilisent une version allégée ; toute la fumée est dessinée d'un coup ;
+- **collisions rapides** : un arbre de recherche (BVH) évite de tester chaque triangle à chaque rayon ;
+- **qualité adaptative** : en mode *Auto*, la définition baisse si les images ralentissent et remonte quand tout va bien ;
+- **chargement** : les effets sont pré-compilés pendant l'affichage du menu, les modules sont préchargés en parallèle, le serveur envoie les fichiers compressés (brotli/gzip) et répond « rien de neuf » (304) quand ils n'ont pas changé ;
+- **réseau** : les messages WebSocket sont compressés (environ 5 fois moins de données).
