@@ -104,33 +104,45 @@ const ui = {
     kingFill: el('kingFill'), kingTxt: el('kingTxt'), crownMsg: el('crownMsg'), crownTime: el('crownTime'),
 };
 
-// Le serveur de jeu est d'abord cherché à l'adresse de la page. Si la page est servie par autre chose
-// (Live Server de VS Code, fichier ouvert directement…), on essaie le serveur Node sur le port 3000.
+// Le serveur de jeu est d'abord cherché à l'adresse de la page. En local, si la page est servie par autre chose
+// (Live Server de VS Code…), on essaie aussi le serveur Node sur le port 3000 (jamais une fois le site en ligne).
 // Un serveur ne compte que s'il répond « hello » : Live Server accepte aussi les WebSocket, mais pour recharger la page.
-const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
-const wsHosts = [...new Set([location.host, `${location.hostname || 'localhost'}:3000`].filter(Boolean))];
-let ws = null;
+// En ligne, un serveur endormi (offre gratuite de Render) met plusieurs secondes à se réveiller : on patiente,
+// et tant que le château ne répond pas, on réessaie régulièrement.
+const online = location.protocol === 'https:';
+const wsProto = online ? 'wss' : 'ws';
+const wsHosts = [location.host || 'localhost:3000'];
+if (!online && location.port !== '3000') wsHosts.push(`${location.hostname || 'localhost'}:3000`);
+let ws = null, retries = 0;
 
 function connect(i = 0) {
-    if (i >= wsHosts.length) { noServer(); return; }
+    if (i >= wsHosts.length) {
+        noServer();
+        setTimeout(() => connect(0), Math.min(10000, 2000 + retries++ * 1000));
+        return;
+    }
     let sock, greeted = false;
     try { sock = new WebSocket(`${wsProto}://${wsHosts[i]}`); } catch { connect(i + 1); return; }
-    const next = () => { clearTimeout(timer); sock.onclose = sock.onmessage = null; sock.close(); connect(i + 1); };
-    const timer = setTimeout(() => { if (!greeted) next(); }, 2000);
+    const next = () => { clearTimeout(timer); clearTimeout(slow); sock.onclose = sock.onmessage = null; sock.close(); connect(i + 1); };
+    const timer = setTimeout(() => { if (!greeted) next(); }, online ? 20000 : 3000);
+    const slow = setTimeout(() => { if (!greeted && myId === null) menuWaking(); }, 1500);
     sock.onmessage = e => {
         let m;
         try { m = JSON.parse(e.data); } catch { return; }
         if (!greeted) {
             if (m.t !== 'hello') return;
             greeted = true;
-            clearTimeout(timer);
+            clearTimeout(timer); clearTimeout(slow);
             ws = sock;
+            retries = 0;
+            menuOnline();
         }
         handlers[m.t]?.(m);
     };
     sock.onclose = () => {
         if (!greeted) { next(); return; }
-        if (myId === null) { noServer(); return; }
+        ws = null;
+        if (myId === null) { noServer(); setTimeout(() => connect(0), 2000); return; }
         // en partie : le serveur a redémarré (mise à jour de l'hébergeur…) ou la connexion a coupé
         phase = 'offline';
         ui.over.classList.remove('show');
@@ -518,10 +530,20 @@ function refreshJoin() {
 function menuRefused(text) {
     (lastAction === 'solo' ? mui.soloNote : lastAction === 'create' ? mui.createNote : lastAction === 'join' ? mui.joinNote : mui.multiNote).textContent = text;
 }
+const MENU_BUTTONS = '#menu .tile, #soloBtn, #createBtn, #joinBtn';
 function menuOffline() {
-    for (const b of document.querySelectorAll('#menu .tile, #soloBtn, #createBtn, #joinBtn')) b.disabled = true;
-    el('homeNote').innerHTML = `Le château ne répond pas 😢 Le jeu a besoin de son serveur, même en solo.`;
+    for (const b of document.querySelectorAll(MENU_BUTTONS)) b.disabled = true;
+    el('homeNote').innerHTML = `Le château ne répond pas 😢 Le jeu a besoin de son serveur, même en solo. Nouvelle tentative en cours…`;
     el('menuLan').textContent = '—';
+}
+// serveur en ligne qui se réveille (offre gratuite) : on prévient que ça peut prendre un moment
+function menuWaking() {
+    for (const b of document.querySelectorAll(MENU_BUTTONS)) b.disabled = true;
+    el('homeNote').innerHTML = `⏳ Le château se réveille… (jusqu'à une minute si personne n'a joué depuis un moment)`;
+}
+function menuOnline() {
+    for (const b of document.querySelectorAll(MENU_BUTTONS)) b.disabled = false;
+    el('homeNote').textContent = '';
 }
 
 // ---- interactions (un seul écouteur pour tout le menu)

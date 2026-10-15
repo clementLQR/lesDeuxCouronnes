@@ -1067,7 +1067,7 @@ wss.on('connection', ws => {
         if (!rooms.has(room.id)) return;
         withRoom(room, () => {
             const p = players.get(id);
-            if (p) gameMessage(p, m);
+            try { if (p) gameMessage(p, m); } catch (err) { console.error(`Erreur sur un message (salon ${room.id}) :`, err); }
         });
     });
 
@@ -1077,15 +1077,27 @@ wss.on('connection', ws => {
     });
 });
 
+// un bug dans un salon ne doit jamais faire tomber tout le serveur (et les autres parties avec lui)
 setInterval(() => {
     for (const room of rooms.values()) {
         withRoom(room, () => {
-            step(TICK);
-            if (humans('red') + humans('blue')) broadcast(snapshot());
+            try {
+                step(TICK);
+                if (humans('red') + humans('blue')) broadcast(snapshot());
+            } catch (err) {
+                console.error(`Erreur dans le salon ${room.id} :`, err);
+            }
             fx = [];
         });
     }
 }, TICK * 1000);
+process.on('uncaughtException', err => {
+    if (err.code === 'EADDRINUSE') {                    // port déjà pris : inutile de continuer sans écouter
+        console.error(`Le port ${PORT} est déjà utilisé (un autre serveur tourne déjà ?)`);
+        process.exit(1);
+    }
+    console.error('Erreur inattendue :', err);
+});
 // les visiteurs du menu voient la liste des salons se mettre à jour
 setInterval(() => {
     if (!visitors.size) return;
