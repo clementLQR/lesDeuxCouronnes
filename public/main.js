@@ -109,10 +109,14 @@ const ui = {
 // Un serveur ne compte que s'il répond « hello » : Live Server accepte aussi les WebSocket, mais pour recharger la page.
 // En ligne, un serveur endormi (offre gratuite de Render) met plusieurs secondes à se réveiller : on patiente,
 // et tant que le château ne répond pas, on réessaie régulièrement.
+// Attention : au chargement, la construction de la scène et la compilation des effets occupent le navigateur
+// plusieurs secondes. Un minuteur « expiré » passerait alors avant la réponse du serveur et couperait une connexion
+// qui marche : on n'en met donc un que pour démasquer Live Server (page servie par un autre port en local).
 const online = location.protocol === 'https:';
 const wsProto = online ? 'wss' : 'ws';
 const wsHosts = [location.host || 'localhost:3000'];
-if (!online && location.port !== '3000') wsHosts.push(`${location.hostname || 'localhost'}:3000`);
+const foreignPage = !online && location.port !== '' && location.port !== '3000';     // ex. Live Server (5500)
+if (foreignPage) wsHosts.push(`${location.hostname || 'localhost'}:3000`);
 let ws = null, retries = 0;
 
 function connect(i = 0) {
@@ -124,7 +128,10 @@ function connect(i = 0) {
     let sock, greeted = false;
     try { sock = new WebSocket(`${wsProto}://${wsHosts[i]}`); } catch { connect(i + 1); return; }
     const next = () => { clearTimeout(timer); clearTimeout(slow); sock.onclose = sock.onmessage = null; sock.close(); connect(i + 1); };
-    const timer = setTimeout(() => { if (!greeted) next(); }, online ? 20000 : 3000);
+    // seule la page servie par un autre serveur local (Live Server) peut avoir une connexion ouverte qui ne répond
+    // jamais « hello » : on lui laisse 4 s après l'ouverture avant d'essayer le port 3000
+    let timer = null;
+    if (foreignPage && i === 0) sock.onopen = () => { timer = setTimeout(() => { if (!greeted) next(); }, 4000); };
     const slow = setTimeout(() => { if (!greeted && myId === null) menuWaking(); }, 1500);
     sock.onmessage = e => {
         let m;
