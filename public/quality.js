@@ -3,10 +3,10 @@
 //  - « Auto » (par défaut) : la définition de l'image s'adapte toute seule à la machine, image par image.
 //    Un ordinateur rapide garde le plus beau rendu ; un vieux portable ou une tablette baisse la définition
 //    (et, en dernier recours, les ombres) pour rester fluide.
-//  - « Belle », « Équilibrée », « Rapide » : réglages fixes, choisis à la main (bouton ⚙️, mémorisé).
+//  - « Belle », « Équilibrée », « Rapide » : réglages fixes, choisis à la main (fenêtre des réglages ⚙️, mémorisé).
 // =====================================================================
 
-const MODES = ['auto', 'belle', 'equilibree', 'rapide'];
+export const MODES = ['auto', 'belle', 'equilibree', 'rapide'];
 export const QUALITY_LABEL = {
     auto: "Auto : l'image s'adapte à ton appareil",
     belle: 'Belle : tous les détails',
@@ -105,12 +105,14 @@ export function createQuality({ renderer, sun, scene, toast }) {
         } else fastFor = 0;
     }
 
-    function cycle() {
-        mode = MODES[(MODES.indexOf(mode) + 1) % MODES.length];
+    function set(m) {
+        if (!MODES.includes(m)) return mode;
+        mode = m;
         try { localStorage.setItem(KEY, mode); } catch { /* tant pis */ }
         apply();
         return mode;
     }
+    const cycle = () => set(MODES[(MODES.indexOf(mode) + 1) % MODES.length]);
 
-    return { frame, cycle, get mode() { return mode; }, get pixelRatio() { return pr; } };
+    return { frame, cycle, set, get mode() { return mode; }, get pixelRatio() { return pr; } };
 }

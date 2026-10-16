@@ -186,14 +186,20 @@
         .tutoTile.suggest { animation: suggest 1.6s ease-in-out infinite; }
         @keyframes suggest { 50% { box-shadow: 0 6px 0 #3a2a1a, 0 0 0 6px rgba(246, 194, 26, .55); } }
         #tuto {
-            position: fixed; top: 68px; right: 16px; width: 330px; display: none; padding: 12px 14px; z-index: 5;
+            position: fixed; top: 68px; right: 16px; width: 360px; max-width: calc(100vw - 32px); display: none; padding: 12px 14px; z-index: 5;
             border-color: #f6c21a; box-shadow: 0 6px 0 #c99a00;
         }
         #tuto.show { display: block; animation: viewIn .35s cubic-bezier(.3, 1.4, .5, 1); }
         #tutoStep { font-size: 13px; font-weight: 800; opacity: .6; }
         #tutoText { font-size: 15.5px; line-height: 1.4; margin: 4px 0 8px; }
         .tutoFoot { display: flex; align-items: center; gap: 8px; }
-        #tutoDots { flex: 1; letter-spacing: 2px; font-size: 12px; }
+        .tutoGap { flex: 1; }
+        #tutoTrack { height: 6px; border-radius: 3px; background: rgba(0, 0, 0, .1); margin-bottom: 8px; overflow: hidden; }
+        #tutoBar { height: 100%; width: 0; background: #f6c21a; transition: width .4s; }
+        #tutoText small { display: block; font-size: 13px; opacity: .75; margin-top: 4px; }
+        #tutoText .tutoWait { color: #b07800; opacity: 1; font-weight: 700; }
+        #tuto.tip { border-color: #4dabf7; box-shadow: 0 6px 0 #1c7ed6; }
+        #tuto.tip #tutoTrack { display: none; }
         #tutoSkip { font-family: inherit; font-weight: 700; font-size: 13px; background: none; border: none; cursor: pointer; opacity: .6; text-decoration: underline; }
         .tutoHi { outline: 4px solid #f6c21a !important; outline-offset: 3px; animation: tutoHi 1s ease-in-out infinite; }
         @keyframes tutoHi { 50% { outline-color: rgba(246, 194, 26, .25); } }
@@ -522,6 +528,45 @@
         .seats.big .seat { width: 44px; height: 44px; font-size: 22px; }
         .seats.big .sideIco { font-size: 30px; }
 
+        /* fenêtre des réglages (bouton ⚙️) et mentions légales */
+        #settings { z-index: 30; }
+        #settings .modalBox { width: min(520px, 100%); gap: 8px; }
+        .setTabs { display: flex; flex-wrap: wrap; gap: 6px; }
+        .setTabs button {
+            font-family: inherit; font-weight: 800; font-size: 14px; cursor: pointer; color: #3a2a1a;
+            background: #fff3dc; border: 3px solid #3a2a1a; border-radius: 99px; padding: 2px 9px; font-size: 13px;
+        }
+        .setTabs button.sel { background: #3a2a1a; color: #fff; }
+        .setPage { display: none; flex-direction: column; gap: 10px; font-size: 15px; }
+        .setPage.show { display: flex; }
+        .setPage .range { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; align-items: center; }
+        .setPage .range input { grid-column: 1 / -1; width: 100%; accent-color: var(--team); }
+        .setPage .range output { font-weight: 800; font-size: 14px; opacity: .7; }
+        .choice { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+        .choice button {
+            font-family: inherit; font-size: 14px; font-weight: 700; cursor: pointer; color: #3a2a1a; text-align: left;
+            background: #fff3dc; border: 3px solid #3a2a1a; border-radius: 12px; padding: 4px 10px;
+        }
+        .choice button.sel { background: var(--team); color: #fff; }
+        .choice button small { display: block; font-weight: 600; opacity: .8; }
+        .setRow { display: flex; flex-wrap: wrap; gap: 8px; }
+        .keysList { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; font-size: 14px; margin: 0; }
+        .keysList dt { font-weight: 800; white-space: nowrap; }
+        .keysList dd { margin: 0; }
+        .legal { font-size: 14px; line-height: 1.45; }
+        .legal h3 { font-size: 15px; margin: 6px 0 2px; }
+        .legal p { margin: 0 0 4px; }
+        .legal a { color: inherit; font-weight: 700; }
+        .menuLinks { display: flex; justify-content: center; gap: 14px; }
+        .menuLinks button { font-family: inherit; font-weight: 700; font-size: 14px; color: #3a2a1a; background: none; border: none; cursor: pointer; text-decoration: underline; opacity: .75; }
+        #fps {
+            position: fixed; left: 50%; top: 74px; transform: translateX(-50%); z-index: 6; display: none; pointer-events: none;
+            font-weight: 800; font-size: 13px; padding: 1px 10px; border-radius: 99px; background: rgba(58, 42, 26, .7); color: #fff;
+        }
+        #fps.show { display: block; }
+        body.noMinimap #minimap { display: none !important; }
+        body.noFlash::after { display: none !important; }
+
         /* fenêtres (créer / rejoindre un salon) */
         .modal { position: fixed; inset: 0; display: none; place-items: center; background: rgba(40, 28, 16, .45); padding: 16px; z-index: 5; }
         .modal.open { display: grid; animation: fadeIn .2s; }
@@ -638,15 +683,98 @@
     <div id="soundCtl">
         <button id="sfxBtn" title="Couper les bruitages">🔊</button>
         <button id="musicBtn" title="Couper la musique">🎵</button>
-        <button id="qualityBtn" title="Qualité de l'image">⚙️</button>
+        <button id="qualityBtn" title="Réglages">⚙️</button>
         <button id="shoutBtn" title="Cris rapides">📣</button>
     </div>
     <div id="shoutMenu" class="panel"></div>
+    <div id="fps"></div>
+
+    <!-- fenêtre des réglages (bouton ⚙️), avec les mentions légales -->
+    <div class="modal" id="settings">
+        <div class="modalBox panel" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+            <button class="close" data-set-close aria-label="Fermer">✕</button>
+            <h2 id="settingsTitle">⚙️ Réglages du royaume</h2>
+            <div class="setTabs">
+                <button data-tab="son" class="sel">🔊 Son</button>
+                <button data-tab="image">🖼️ Image</button>
+                <button data-tab="commandes">🎮 Commandes</button>
+                <button data-tab="legal">📜 Mentions légales</button>
+            </div>
+
+            <section class="setPage show" data-page="son">
+                <label class="range">🔊 Bruitages <output id="sfxVolTxt"></output><input type="range" id="sfxVol" min="0" max="100" step="5"></label>
+                <label class="range">🎵 Musique <output id="musicVolTxt"></output><input type="range" id="musicVol" min="0" max="100" step="5"></label>
+                <label class="switch"><input type="checkbox" id="sfxOn"><span class="slider"></span><span>Bruitages</span></label>
+                <label class="switch"><input type="checkbox" id="musicOn"><span class="slider"></span><span>Musique</span></label>
+            </section>
+
+            <section class="setPage" data-page="image">
+                <h3>Qualité de l'image</h3>
+                <div class="choice" id="qualityChoice">
+                    <button data-q="auto">✨ Auto<small>S'adapte à ton appareil</small></button>
+                    <button data-q="belle">🏰 Belle<small>Tous les détails</small></button>
+                    <button data-q="equilibree">⚖️ Équilibrée<small>Un bon compromis</small></button>
+                    <button data-q="rapide">⚡ Rapide<small>Pour les petits appareils</small></button>
+                </div>
+                <label class="switch"><input type="checkbox" id="optFlash"><span class="slider"></span><span>Éclair rouge quand ton château est touché</span></label>
+                <label class="switch"><input type="checkbox" id="optMinimap"><span class="slider"></span><span>Mini-carte</span></label>
+                <label class="switch"><input type="checkbox" id="optFps"><span class="slider"></span><span>Afficher les images par seconde</span></label>
+                <div class="setRow"><button class="smallBtn" id="fullscreenBtn">⛶ Plein écran</button></div>
+            </section>
+
+            <section class="setPage" data-page="commandes">
+                <label class="range">🎥 Vitesse de la caméra <output id="camSensTxt"></output><input type="range" id="camSens" min="40" max="200" step="10"></label>
+                <label class="switch"><input type="checkbox" id="optInvert"><span class="slider"></span><span>Inverser le haut et le bas de la caméra</span></label>
+                <h3>Les touches du royaume</h3>
+                <dl class="keysList">
+                    <dt>Z Q S D / flèches</dt><dd>Déplacer ton roi</dd>
+                    <dt>Maj · Espace</dt><dd>Courir · sauter</dd>
+                    <dt>Clic · F</dt><dd>Coup d'épée</dd>
+                    <dt>Glisser · molette</dt><dd>Tourner · rapprocher la caméra</dd>
+                    <dt>E</dt><dd>Lever ou baisser ton pont-levis (devant la porte)</dd>
+                    <dt>1 à 6</dt><dd>Former des troupes</dd>
+                    <dt>7 8 9 0</dt><dd>Tours, huile, barricades, chapiteau</dd>
+                    <dt>R T Y</dt><dd>Potion, boule de feu, dragon</dd>
+                    <dt>V B N</dt><dd>Attaquer, défendre, suivre le roi</dd>
+                    <dt>Échap</dt><dd>Annuler la visée · fermer cette fenêtre</dd>
+                </dl>
+                <div class="setRow">
+                    <button class="smallBtn" id="replayTuto">📖 Revoir la partie guidée</button>
+                    <button class="smallBtn" id="resetSettings">↺ Réglages d'origine</button>
+                </div>
+            </section>
+
+            <section class="setPage legal" data-page="legal">
+                <h3>Éditeur</h3>
+                <p><b>Les Deux Couronnes</b> est un jeu gratuit, sans publicité ni achat, créé par Clément : un projet personnel pour éprouver
+                    ce que l'intelligence artificielle sait faire (le jeu a été conçu et programmé avec l'aide de Claude, l'IA d'Anthropic). Code source :
+                    <a href="https://github.com/clementLQR/lesDeuxCouronnes" target="_blank" rel="noopener">github.com/clementLQR/lesDeuxCouronnes</a>.
+                    Pour toute question, ouvre un ticket («&nbsp;issue&nbsp;») sur cette page.</p>
+                <h3>Hébergement</h3>
+                <p>Render Services, Inc., 525 Brannan Street, Suite 300, San Francisco, CA 94107, États-Unis ·
+                    <a href="https://render.com" target="_blank" rel="noopener">render.com</a>.</p>
+                <h3>Données personnelles et cookies</h3>
+                <p>Aucun compte, aucun cookie, aucune mesure d'audience. Tes réglages (son, image, caméra) et le fait d'avoir terminé
+                    la partie guidée sont gardés <b>dans ton navigateur seulement</b> (stockage local) : le bouton «&nbsp;Réglages d'origine&nbsp;»
+                    ou l'effacement des données du site les supprime.</p>
+                <p>En multijoueur, le nom du salon et son mot de passe passent par le serveur le temps de la partie, en mémoire seulement :
+                    tout est effacé au redémarrage du serveur. Comme pour tout site, l'hébergeur peut garder des journaux techniques
+                    (adresse IP, heure de connexion).</p>
+                <p>La police d'écriture vient de Google Fonts et la bibliothèque 3D de jsDelivr : ton navigateur leur transmet ton adresse IP
+                    pour les télécharger.</p>
+                <h3>Crédits</h3>
+                <p>Rendu 3D : <a href="https://threejs.org" target="_blank" rel="noopener">Three.js</a> (licence MIT) et three-mesh-bvh (MIT) ·
+                    serveur : Node.js et ws (MIT) · police <i>Baloo 2</i> (SIL Open Font License). Les modèles 3D sont construits par le code
+                    du jeu, et tous les sons et musiques sont synthétisés en direct : aucun fichier emprunté.</p>
+            </section>
+        </div>
+    </div>
     <div id="bubbles"></div>
     <div id="tuto" class="panel">
         <div id="tutoStep"></div>
         <div id="tutoText"></div>
-        <div class="tutoFoot"><span id="tutoDots"></span><button id="tutoSkip">Passer le tutoriel</button><button id="tutoNext" class="smallBtn">C'est parti !</button></div>
+        <div id="tutoTrack"><div id="tutoBar"></div></div>
+        <div class="tutoFoot"><button id="tutoSkip">Passer la leçon</button><span class="tutoGap"></span><button id="tutoNext" class="smallBtn">Compris !</button></div>
     </div>
     <div id="touchUI">
         <div id="joy"><div id="joyKnob"></div></div>
@@ -726,6 +854,7 @@
                     <span><b>Partie guidée</b>Nouveau sur le tapis ? Apprends à régner pas à pas, l'Écuyer d'en face t'attendra.</span>
                 </button>
                 <small class="note" id="homeNote"></small>
+                <div class="menuLinks"><button data-settings="son">⚙️ Réglages</button><button data-settings="legal">📜 Mentions légales</button></div>
                 <details class="rules panel">
                     <summary>📜 Le Grand Parchemin des règles</summary>
                     <p class="oyez">Oyez, oyez, jeunes seigneurs ! Voici les lois du royaume du tapis :</p>

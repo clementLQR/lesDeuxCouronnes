@@ -728,8 +728,8 @@ function checkVault() {
 
 // ---------------------------------------------------------------- IA
 function updateAI(team, dt) {
-    // partie guidée : trêve jusqu'à la fin de la leçon (ou 4 minutes au plus)
-    if (game.peace && Date.now() - game.startedAt < 240000) return;
+    // partie guidée : trêve jusqu'à la fin de la leçon (ou 10 minutes au plus)
+    if (game.peace && Date.now() - game.startedAt < 600000) return;
     game.peace = false;
     game.aiTimer[team] -= dt;
     if (game.aiTimer[team] > 0) return;
@@ -888,7 +888,7 @@ function step(dt) {
         game.clock += dt;
         while (game.riches < RICHES.length && game.clock >= RICHES[game.riches][0]) broadcast({ t: 'msg', text: RICHES[game.riches++][2] });
         for (const t of TEAMS) {
-            earn(t, INCOME * (game.riches ? RICHES[game.riches - 1][1] : 1) * dt * (game.ai[t] ? LEVELS[game.level].income : 1));
+            if (!(game.peace && game.ai[t])) earn(t, INCOME * (game.riches ? RICHES[game.riches - 1][1] : 1) * dt * (game.ai[t] ? LEVELS[game.level].income : 1));
             if (game.ai[t]) updateAI(t, dt);
         }
         trainUnits(dt);

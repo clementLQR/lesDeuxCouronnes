@@ -8,11 +8,13 @@
 let ctx = null, master, sfxBus, musicBus, noise = null;
 const listener = { x: 0, y: 0, z: 0 };
 
-const prefs = { sfx: true, music: true };
+// sfx / music : coupé ou non ; sfxVol / musicVol : volume de 0 à 1 (fenêtre des réglages)
+const prefs = { sfx: true, music: true, sfxVol: 1, musicVol: 1 };
 try {
     const saved = JSON.parse(localStorage.getItem('deuxCouronnes.audio') || '{}');
     if (typeof saved.sfx === 'boolean') prefs.sfx = saved.sfx;
     if (typeof saved.music === 'boolean') prefs.music = saved.music;
+    for (const k of ['sfxVol', 'musicVol']) if (typeof saved[k] === 'number') prefs[k] = Math.min(1, Math.max(0, saved[k]));
 } catch { /* stockage indisponible : réglages par défaut */ }
 function savePrefs() {
     try { localStorage.setItem('deuxCouronnes.audio', JSON.stringify(prefs)); } catch { /* tant pis */ }
@@ -27,8 +29,8 @@ export function unlockAudio() {
         const comp = ctx.createDynamicsCompressor();             // évite la saturation quand tout explose en même temps
         comp.threshold.value = -14; comp.ratio.value = 4;
         master = ctx.createGain(); master.gain.value = 0.9;
-        sfxBus = ctx.createGain(); sfxBus.gain.value = prefs.sfx ? 1 : 0;
-        musicBus = ctx.createGain(); musicBus.gain.value = prefs.music ? 0.55 : 0;
+        sfxBus = ctx.createGain(); sfxBus.gain.value = sfxGain();
+        musicBus = ctx.createGain(); musicBus.gain.value = musicGain();
         sfxBus.connect(master); musicBus.connect(master);
         master.connect(comp); comp.connect(ctx.destination);
         const len = ctx.sampleRate * 2;
@@ -40,15 +42,23 @@ export function unlockAudio() {
     if (ctx.state === 'suspended') ctx.resume();
 }
 
+const sfxGain = () => (prefs.sfx ? prefs.sfxVol : 0);
+const musicGain = () => (prefs.music ? 0.55 * prefs.musicVol : 0);
 export const audioPrefs = () => ({ ...prefs });
 export function setSfx(on) {
     prefs.sfx = on; savePrefs();
-    if (sfxBus) sfxBus.gain.setTargetAtTime(on ? 1 : 0, ctx.currentTime, 0.05);
+    if (sfxBus) sfxBus.gain.setTargetAtTime(sfxGain(), ctx.currentTime, 0.05);
     if (!on) for (const loop of loops) loop.stop();
 }
 export function setMusic(on) {
     prefs.music = on; savePrefs();
-    if (musicBus) musicBus.gain.setTargetAtTime(on ? 0.55 : 0, ctx.currentTime, 0.2);
+    if (musicBus) musicBus.gain.setTargetAtTime(musicGain(), ctx.currentTime, 0.2);
+}
+// volumes de 0 à 1 (curseurs de la fenêtre des réglages)
+export function setVolumes(sfxVol, musicVol) {
+    prefs.sfxVol = sfxVol; prefs.musicVol = musicVol; savePrefs();
+    if (sfxBus) sfxBus.gain.setTargetAtTime(sfxGain(), ctx.currentTime, 0.05);
+    if (musicBus) musicBus.gain.setTargetAtTime(musicGain(), ctx.currentTime, 0.1);
 }
 export function setListener(x, y, z) { listener.x = x; listener.y = y; listener.z = z; }
 

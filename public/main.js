@@ -4,10 +4,10 @@ import {
     initWorld, buildRoom, buildToyCastle, buildLionCastle, animateFigure, makePlayerModel, makeUnitModel, makeWarDragon,
     colliders, groundColliders, flags, flames, spinners, mists, TEAM, plastic,
 } from './world.js';
-import { unlockAudio, play, startLoop, setListener, setSfx, setMusic, audioPrefs, setBattle } from './audio.js';
+import { unlockAudio, play, startLoop, setListener, setSfx, setMusic, setVolumes, audioPrefs, setBattle } from './audio.js';
 import { mergeStatic, makeBatch, bakeModel } from './bake.js';
 import { compactColliders, prepare, finishColliders } from './collision.js';
-import { createQuality, wantAntialias, QUALITY_LABEL } from './quality.js';
+import { createQuality, wantAntialias } from './quality.js';
 
 // le son ne peut démarrer qu'après un geste du joueur (règle des navigateurs)
 for (const ev of ['pointerdown', 'keydown']) window.addEventListener(ev, unlockAudio, { capture: true });
@@ -242,6 +242,9 @@ const handlers = {
         play(m.winner === myTeam ? 'victory' : 'defeat');
         if (m.stats) showOverStats(m.stats, m.duration || 0);
         tutoFinish();
+        tutorialMode = false;
+        tutoCloseTip();
+        tutoArrowAt(null);
         winner = m.winner;
     },
     msg(m) { toast(m.text, 4); },
@@ -356,6 +359,7 @@ function updatePlayer(dt) {
         mx = mx / l * speed * dt; mz = mz / l * speed * dt;
         move(mx, mz);
         facing = Math.atan2(mx, mz);
+        if (run) tutoFlags.ran = true;
     }
     // recul quand un ennemi nous frappe
     if (knock.lengthSq() > 0.01) {
@@ -369,7 +373,7 @@ function updatePlayer(dt) {
         if (g >= pos.y - STEP && g <= pos.y + STEP) { pos.y = g; vy = 0; }
         else if (g < pos.y - STEP) onGround = false;
     }
-    if (jumpRequest && onGround) { vy = JUMP; onGround = false; }
+    if (jumpRequest && onGround) { vy = JUMP; onGround = false; tutoFlags.jumped = true; }
     jumpRequest = false;
     if (!onGround) {
         vy -= GRAVITY * dt;
@@ -393,13 +397,14 @@ function updatePlayer(dt) {
 function attack() {
     if (!player || player.swing > 0 || kingDead) return;
     play('swing');
+    tutoFlags.hits++;
     player.swing = 0.35;
     send({ t: 'attack' });
 }
 
 // ---------------------------------------------------------------- contrôles
 window.addEventListener('keydown', e => {
-    if (e.target.tagName === 'INPUT' || inMenu) return;
+    if (e.target.tagName === 'INPUT' || inMenu || settingsOpen()) return;
     keys[e.code] = true;
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
     if (e.repeat) return;
@@ -466,8 +471,8 @@ canvas.addEventListener('pointermove', e => {
     if (!dragging) return;
     const dx = e.clientX - lastX, dy = e.clientY - lastY;
     dragDist += Math.abs(dx) + Math.abs(dy);
-    yaw -= dx * 0.006;
-    pitch = THREE.MathUtils.clamp(pitch + dy * 0.005, -0.1, 1.35);
+    yaw -= dx * 0.006 * settings.camSens;
+    pitch = THREE.MathUtils.clamp(pitch + dy * 0.005 * settings.camSens * (settings.invert ? -1 : 1), -0.1, 1.35);
     lastX = e.clientX; lastY = e.clientY;
 });
 canvas.addEventListener('pointerup', () => {
@@ -501,16 +506,100 @@ function refreshSoundBtns() {
 sfxBtn.addEventListener('click', () => { unlockAudio(); setSfx(!audioPrefs().sfx); refreshSoundBtns(); play('click'); sfxBtn.blur(); });
 musicBtn.addEventListener('click', () => { unlockAudio(); setMusic(!audioPrefs().music); refreshSoundBtns(); play('click'); musicBtn.blur(); });
 refreshSoundBtns();
-// qualité de l'image : auto → belle → équilibrée → rapide
-const qualityBtn = el('qualityBtn');
-const refreshQualityBtn = () => { qualityBtn.title = `Qualité de l'image (${QUALITY_LABEL[quality.mode]})`; };
-qualityBtn.addEventListener('click', () => {
-    const mode = quality.cycle();
-    refreshQualityBtn();
-    toast(`🖼️ Qualité ${QUALITY_LABEL[mode]}`, 3);
-    qualityBtn.blur();
+// ---------------------------------------------------------------- fenêtre des réglages (bouton ⚙️, mémorisés)
+// son, qualité de l'image, caméra, interface… et les mentions légales
+const SETTINGS_KEY = 'deuxCouronnes.reglages';
+const SETTINGS_DEFAULT = { camSens: 1, invert: false, minimap: true, fps: false, flash: true };
+const settings = { ...SETTINGS_DEFAULT };
+try { Object.assign(settings, JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}')); } catch { /* réglages par défaut */ }
+const saveSettings = () => { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch { /* tant pis */ } };
+const settingsEl = el('settings');
+const settingsOpen = () => settingsEl.classList.contains('open');
+function applySettings() {
+    document.body.classList.toggle('noMinimap', !settings.minimap);
+    document.body.classList.toggle('noFlash', !settings.flash);
+    el('fps').classList.toggle('show', settings.fps);
+}
+function refreshSettings() {
+    const p = audioPrefs();
+    el('sfxVol').value = Math.round(p.sfxVol * 100);
+    el('musicVol').value = Math.round(p.musicVol * 100);
+    el('sfxVolTxt').textContent = `${el('sfxVol').value} %`;
+    el('musicVolTxt').textContent = `${el('musicVol').value} %`;
+    el('sfxOn').checked = p.sfx;
+    el('musicOn').checked = p.music;
+    for (const b of el('qualityChoice').children) b.classList.toggle('sel', b.dataset.q === quality.mode);
+    el('optFlash').checked = settings.flash;
+    el('optMinimap').checked = settings.minimap;
+    el('optFps').checked = settings.fps;
+    el('optInvert').checked = settings.invert;
+    el('camSens').value = Math.round(settings.camSens * 100);
+    el('camSensTxt').textContent = `×${settings.camSens.toFixed(1)}`;
+    el('fullscreenBtn').textContent = document.fullscreenElement ? '⛶ Quitter le plein écran' : '⛶ Plein écran';
+    el('fullscreenBtn').hidden = !document.documentElement.requestFullscreen;
+}
+function showSettingsTab(tab) {
+    for (const b of settingsEl.querySelectorAll('[data-tab]')) b.classList.toggle('sel', b.dataset.tab === tab);
+    for (const p of settingsEl.querySelectorAll('[data-page]')) p.classList.toggle('show', p.dataset.page === tab);
+}
+function openSettings(tab = 'son') {
+    releaseAll();                       // le roi ne doit pas continuer d'avancer pendant qu'on règle
+    refreshSettings();
+    showSettingsTab(tab);
+    settingsEl.classList.add('open');
+}
+const closeSettings = () => settingsEl.classList.remove('open');
+el('qualityBtn').addEventListener('click', () => { openSettings(); el('qualityBtn').blur(); });
+for (const b of document.querySelectorAll('[data-settings]')) b.addEventListener('click', () => openSettings(b.dataset.settings));
+settingsEl.addEventListener('click', e => {
+    if (e.target === settingsEl || e.target.closest('[data-set-close]')) return closeSettings();
+    const tab = e.target.closest('[data-tab]');
+    if (tab) showSettingsTab(tab.dataset.tab);
+    const q = e.target.closest('[data-q]');
+    if (q) { quality.set(q.dataset.q); refreshSettings(); }
 });
-refreshQualityBtn();
+window.addEventListener('keydown', e => { if (e.key === 'Escape' && settingsOpen()) closeSettings(); });
+const onVolume = () => { unlockAudio(); setVolumes(el('sfxVol').value / 100, el('musicVol').value / 100); refreshSettings(); };
+el('sfxVol').addEventListener('input', onVolume);
+el('musicVol').addEventListener('input', onVolume);
+el('sfxVol').addEventListener('change', () => play('click'));
+el('sfxOn').addEventListener('change', e => { unlockAudio(); setSfx(e.target.checked); refreshSoundBtns(); });
+el('musicOn').addEventListener('change', e => { unlockAudio(); setMusic(e.target.checked); refreshSoundBtns(); });
+for (const [id, k] of [['optFlash', 'flash'], ['optMinimap', 'minimap'], ['optFps', 'fps'], ['optInvert', 'invert']]) {
+    el(id).addEventListener('change', e => { settings[k] = e.target.checked; saveSettings(); applySettings(); });
+}
+el('camSens').addEventListener('input', e => { settings.camSens = e.target.value / 100; saveSettings(); refreshSettings(); });
+el('fullscreenBtn').addEventListener('click', () => {
+    const p = document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+    p?.catch?.(() => toast("🖼️ Ton navigateur refuse le plein écran.", 3));
+});
+document.addEventListener('fullscreenchange', refreshSettings);
+// revoir la partie guidée : depuis l'accueil on la lance tout de suite, en jeu on la propose au prochain passage par l'accueil
+el('replayTuto').addEventListener('click', () => {
+    try { localStorage.removeItem('deuxCouronnes.tutoDone'); } catch { /* tant pis */ }
+    el('tutoBtn').classList.add('suggest');
+    closeSettings();
+    if (inMenu) el('tutoBtn').click();
+    else toast("📖 La partie guidée t'attend à l'accueil (bouton du menu).", 4);
+});
+el('resetSettings').addEventListener('click', () => {
+    Object.assign(settings, SETTINGS_DEFAULT);
+    try { localStorage.removeItem(SETTINGS_KEY); } catch { /* tant pis */ }
+    setVolumes(1, 1); setSfx(true); setMusic(true);
+    quality.set('auto');
+    refreshSoundBtns(); applySettings(); refreshSettings();
+    toast('↺ Les réglages sont revenus à leur état d’origine.', 3);
+});
+applySettings();
+// images par seconde (réglage « Afficher les images par seconde »)
+let fpsFrames = 0, fpsTime = 0;
+function updateFps(dtReal) {
+    if (!settings.fps) return;
+    fpsFrames++; fpsTime += dtReal;
+    if (fpsTime < 0.5) return;
+    setText(el('fps'), `${Math.round(fpsFrames / fpsTime)} images/s`);
+    fpsFrames = 0; fpsTime = 0;
+}
 // petit « clic » sur tous les boutons de l'interface (menu, boutique, grimoire…)
 document.addEventListener('click', e => {
     if (e.target.closest('button') && !e.target.closest('#soundCtl')) play('click');
@@ -909,57 +998,205 @@ let touchRun = false;
 // =====================================================================
 //  PARTIE GUIDÉE
 // =====================================================================
-let tutorialMode = false, tutoStep = -1, tutoStart = null, tutoHi = null;
-const TUTO = [
-    { text: () => `👑 <b>Bienvenue, Sire !</b> Voici ton château. Déplace ton roi avec <b>Z Q S D</b>${isTouch ? ' (ou le joystick)' : ''} et tourne la caméra en faisant glisser ${isTouch ? 'ton doigt' : 'la souris'}.`,
-      done: () => tutoStart && pos.distanceTo(tutoStart) > 4 },
-    { text: () => `🔱 <b>Forme ta première troupe</b> : clique sur <b>Soldats</b> (touche <b>1</b>). Elle sort de ta caserne, dans la cour.`,
-      hi: '#btns [data-type="infantry"]', done: s => s.u.some(u => u[2] === myI()) || s.q[myI()].some(q => q[0].length) },
-    { text: () => `⛓️ <b>Ton pont-levis</b> protège ton trésor. Va devant ta porte et appuie sur <b>E</b>${isTouch ? ' (ou ⛓️)' : ''} pour le lever.`,
-      done: s => s.door[myI()] === 0 },
-    { text: () => `👍 Bien ! Mais pont levé, <b>tes troupes restent enfermées</b>. Rabaisse-le (<b>E</b>) pour les laisser sortir.`,
-      done: s => s.door[myI()] === 1 },
-    { text: () => `🚩 <b>Donne un ordre</b> à ton armée : clique sur <b>Défendre</b> (touche <b>B</b>). Tes troupes tiendront la ligne devant le pont-levis.`,
-      hi: '.orderBtn[data-order="defend"]', done: s => s.or[myI()] === 1 },
-    { text: () => `🔮 <b>Bâtis la Tour de l'Alchimiste</b> : clique sur « Bâtir » sous la potion, dans le grimoire. Tu pourras ensuite soigner ton roi (touche <b>R</b>).`,
-      hi: '.spellBtn[data-spell="potion"]', done: s => !!s.mg[myI()][0] },
-    { text: () => `🪵 <b>Renforce ta défense</b> : achète des <b>Barricades</b> (touche <b>9</b>). Elles barrent la route aux soldats ennemis.`,
-      hi: '#btns [data-def="barricade"]', done: s => s.d[myI()][DEF_KEYS.indexOf('barricade')] >= 1 },
-    { text: () => `🏆 <b>Dernière leçon, la plus importante</b> : fais tomber le château ennemi à 0 PV (canons, béliers…), son pont-levis cédera. Entre alors avec ton roi dans sa <b>salle au trésor</b>. L'Écuyer d'en face se réveille… Bonne chance !`,
-      last: true },
-];
+// La leçon avance étape par étape : chaque étape attend une action du joueur (done) ou un simple
+// « Compris ! » (info). Une fois la leçon finie, le Chambellan donne encore des conseils pendant la
+// bataille, au bon moment (TUTO_TIPS), et une flèche dorée montre où aller.
+let tutorialMode = false, tutoStep = -1, tutoStart = null, tutoHi = [], tutoLesson = false, tutoTipTimer = 0;
+const tutoFlags = { ran: false, jumped: false, hits: 0 };
+const tutoTipsSeen = new Set();
 const myI = () => (myTeam === 'red' ? 0 : 1);
+const enemyTeam = () => (myTeam === 'red' ? 'blue' : 'red');
+// touche au clavier, ou bouton à l'écran sur tablette
+const tKey = (k, touch) => `<b>${k}</b>${isTouch && touch ? ` (ou ${touch})` : ''}`;
+// la troupe est-elle sortie ou en formation ?
+const hasUnit = (s, type) => {
+    const ti = TYPES.indexOf(type);
+    return s.u.some(u => u[1] === ti && u[2] === myI()) || s.q[myI()].some(q => q[0].includes(ti));
+};
+// il manque de l'or : on rassure le joueur, le trésor se remplit tout seul
+const waitGold = cost => (myGold < cost ? `<small class="tutoWait">⏳ Ton trésor se remplit… encore ${cost - myGold} pièces d'or.</small>` : '');
+const TUTO = [
+    { text: () => `👑 <b>Bienvenue, Sire !</b> Ce château de jouets est le tien. Déplace ton roi avec ${tKey('Z Q S D', 'le joystick')} et tourne la caméra en faisant glisser ${isTouch ? 'ton doigt' : 'la souris'} (la molette rapproche ou éloigne la vue).`,
+      done: () => tutoStart && pos.distanceTo(tutoStart) > 4 },
+    { text: () => `🏃 Un roi doit savoir se presser ! Cours en tenant ${tKey('Maj', '🏃')} et saute avec ${tKey('Espace', '⤒')}.` +
+        `<br>${tutoFlags.ran ? '✅' : '⬜'} courir · ${tutoFlags.jumped ? '✅' : '⬜'} sauter`,
+      done: () => tutoFlags.ran && tutoFlags.jumped },
+    { text: () => `🪙 <b>Ton trésor</b>, en haut de la boutique, se remplit tout seul (${INCOME_TXT}). Chaque ennemi abattu te rapporte en plus une <b>prime</b>. Tout s'achète avec cet or : troupes, défenses et sorts.`,
+      hi: '#gold', info: true },
+    { text: () => `🔱 <b>Forme tes premiers Soldats</b> : clique sur leur bouton (touche <b>1</b>). Ils sortent de ta <b>caserne</b>, dans la cour, puis marchent vers l'ennemi.${waitGold(UNITS.infantry.cost)}`,
+      hi: '#btns [data-type="infantry"]', done: s => hasUnit(s, 'infantry') },
+    { text: () => `🏹 <b>Forme des Archers</b> (touche <b>2</b>). Ils tirent de loin, à l'abri derrière les autres.${waitGold(UNITS.archer.cost)}`,
+      hi: '#btns [data-type="archer"]', done: s => hasUnit(s, 'archer') },
+    { text: () => `🛡️ <b>Forme un Chevalier</b> (touche <b>3</b>) : lent à former, mais très solide.${waitGold(UNITS.knight.cost)}`,
+      hi: '#btns [data-type="knight"]', done: s => hasUnit(s, 'knight') },
+    { text: () => `⚖️ <b>Chaque troupe a sa force et sa faiblesse</b>, comme à pierre-feuille-ciseaux :<br>🏹 les archers battent les 🔱 soldats,<br>🛡️ les chevaliers battent les 🏹 archers,<br>🔱 les lances des soldats battent les 🛡️ chevaliers (et les béliers).<br>Sur chaque bouton, la pastille <b style="color:#2f9e44">verte</b> montre qui la troupe bat, la <b style="color:#e03131">rouge</b> qui elle craint. Une armée variée gagne !`,
+      hi: '#btns [data-type="infantry"], #btns [data-type="archer"], #btns [data-type="knight"]', info: true },
+    { text: () => `💣 <b>L'atelier de siège</b> forme les engins qui abattent les murailles : le <b>Canon</b> (4), l'<b>Engin de siège</b> (5, tire de très loin) et le <b>Bélier</b> (6, enfonce le pont-levis). Ils ne savent pas se défendre : escorte-les ! Forme-en un.${waitGold(UNITS.cannon.cost)}`,
+      hi: '#btns [data-type="cannon"], #btns [data-type="catapult"], #btns [data-type="ram"]', done: s => hasUnit(s, 'cannon') || hasUnit(s, 'catapult') || hasUnit(s, 'ram') },
+    { text: () => `⛓️ <b>Ton pont-levis</b> protège ton trésor. Suis la <b>flèche dorée</b> jusqu'à ta porte et appuie sur ${tKey('E', '⛓️')} pour le lever.`,
+      at: () => toWorld(myTeam, 0, 0, 9), done: s => s.door[myI()] === 0 },
+    { text: () => `👍 Bien ! Pont levé, l'ennemi doit frapper la porte… mais <b>tes troupes restent enfermées</b> ! Rabaisse-le (${tKey('E', '⛓️')}) pour les laisser sortir.`,
+      at: () => toWorld(myTeam, 0, 0, 9), done: s => s.door[myI()] === 1 },
+    { text: () => `🚩 <b>Donne des ordres à ton armée</b>, dans le cadre « Ordres ». Clique sur <b>Défendre</b> (touche <b>B</b>) : tes troupes tiendront la ligne devant ton pont-levis, sous ton étendard.`,
+      hi: '.orderBtn[data-order="defend"]', done: s => s.or[myI()] === 1 },
+    { text: () => `👑 Clique maintenant sur <b>Suivre le roi</b> (touche <b>N</b>) : tes troupes t'escortent partout, même jusque dans le château ennemi. Promène-toi, elles te suivent !`,
+      hi: '.orderBtn[data-order="follow"]', done: s => s.or[myI()] === 2 },
+    { text: () => `⚔️ <b>Ton roi sait se battre</b> : frappe de ton épée avec ${isTouch ? 'le bouton ⚔️' : 'un <b>clic</b> ou la touche <b>F</b>'}. Donne trois coups dans le vide pour t'entraîner (${Math.min(tutoFlags.hits, 3)} / 3).<br><small>S'il tombe, ton roi est couronné de nouveau sur le tapis royal quelques secondes plus tard.</small>`,
+      done: () => tutoFlags.hits >= 3 },
+    { text: () => `🪵 <b>Renforce ton château</b> : achète des <b>Barricades</b> (touche <b>9</b>). Elles se dressent là où pointe la flèche et barrent la route aux ennemis. Plus tard, pense aussi aux <b>Tours de garde</b> (7), à l'<b>Huile bouillante</b> (8) et au <b>Chapiteau</b> (0), une caserne hors les murs.${waitGold(DEFENSES.barricade.levels[1].cost)}`,
+      hi: '#btns [data-def="barricade"]', at: () => toWorld(myTeam, 0, 0, 14.2), done: s => s.d[myI()][DEF_KEYS.indexOf('barricade')] >= 1 },
+    { text: () => `🔮 <b>La magie !</b> Dans le grimoire, à gauche, bâtis la <b>Tour de l'Alchimiste</b> : clique sur « Bâtir » sous la potion. Elle s'élève derrière ton château.${waitGold(MAGES.potion.build)}`,
+      hi: '.spellBtn[data-spell="potion"]', done: s => !!s.mg[myI()][0] },
+    { text: () => `🧪 Ta tour est bâtie ! La <b>Potion de vie</b> (touche <b>R</b>) soignera ton roi quand il sera blessé. Plus tard, la <b>Boule de feu</b> (T) brûle les ennemis là où tu vises, et le <b>Dragon</b> (Y) ravage tout sur son passage. Chaque sort coûte de l'or et doit se recharger.`,
+      hi: '.spellBtn', info: true },
+    { text: () => `⚔️ Assez d'entraînement ! Clique sur <b>Attaquer</b> (touche <b>V</b>) : tes troupes marchent sur le château ennemi.`,
+      hi: '.orderBtn[data-order="attack"]', done: s => s.or[myI()] === 0 },
+    { text: () => `🏆 <b>Comment gagner</b> : fais tomber le château ennemi à <b>0 PV</b> (barre en haut de l'écran) avec tes engins et tes troupes. Son pont-levis cédera : entre alors avec ton roi dans sa <b>salle au trésor</b> ! Mais garde un œil sur le tien…<br>L'Écuyer d'en face se réveille dès que tu cliques. Je te soufflerai encore quelques conseils. Bonne chance, Sire !`,
+      hi: '#bars .bar', at: () => toWorld(enemyTeam(), 0, 0, 9), last: true },
+];
+const INCOME_TXT = '10 pièces par seconde';
+// conseils pendant la bataille (partie guidée seulement), chacun donné une fois
+const TUTO_TIPS = [
+    { id: 'enemy', when: s => s.u.some(u => u[2] !== myI()),
+      text: () => `👀 Les troupes de l'Écuyer approchent ! Regarde leurs icônes et forme ce qui les bat (pastilles vertes de la boutique).` },
+    { id: 'hurtCastle', when: s => s.hp[myI()] < CASTLE_HP - 60,
+      text: () => `🏰 Ton château est touché ! À 0 PV, ton pont-levis cède. Améliore tes <b>Tours de garde</b> (7) ou installe l'<b>Huile bouillante</b> (8).`,
+      hi: '#btns [data-def="towers"], #btns [data-def="oil"]' },
+    { id: 'rich', when: () => myGold >= 600,
+      text: () => `🪙 Ton trésor déborde (${myGold} pièces) ! Un roi avare perd la guerre : forme des troupes, des engins ou bâtis une défense.`, hi: '#gold' },
+    { id: 'potion', when: s => myKingHpPct < 45 && !kingDead && !!s.mg[myI()][0],
+      text: () => `🧪 Ton roi est blessé : bois une <b>Potion de vie</b> (touche <b>R</b>) !`, hi: '.spellBtn[data-spell="potion"]' },
+    { id: 'dead', when: () => kingDead, urgent: true,
+      text: () => `💀 Ton roi est tombé ! Pas d'inquiétude : il sera couronné de nouveau sur le tapis royal dans quelques secondes. Ton armée, elle, continue le combat.` },
+    { id: 'weak', when: s => s.hp[1 - myI()] < CASTLE_HP / 2,
+      text: () => `🔥 Le château ennemi chancelle (moins de la moitié de ses PV) ! Envoie des <b>Canons</b> et des <b>Béliers</b> pour l'achever, avec des soldats pour les escorter.` },
+    { id: 'myBreach', when: s => !!s.br[myI()], urgent: true,
+      text: () => `😱 Ton pont-levis a cédé ! Protège ta salle au trésor : ordre <b>Défendre</b> (B), et frappe les rois ennemis de ton épée.`, hi: '.orderBtn[data-order="defend"]' },
+    { id: 'breach', when: s => !!s.br[1 - myI()], keep: true, urgent: true,
+      text: () => `🚪 <b>Le pont-levis ennemi a cédé !</b> Fonce avec ton roi jusqu'à la salle au trésor : suis la flèche dorée ! Avec l'ordre <b>Suivre le roi</b> (N), ton armée t'escorte.`,
+      at: () => vaults.find(v => v.castle.team !== myTeam).pos, hi: '.orderBtn[data-order="follow"]' },
+];
+
+// flèche dorée et colonne de lumière : « c'est ici ! »
+const tutoArrow = new THREE.Group();
+{
+    const gold = new THREE.MeshBasicMaterial({ color: '#f6c21a' });
+    const cone = new THREE.Mesh(new THREE.ConeGeometry(0.55, 1.1, 16).rotateX(Math.PI), gold);
+    cone.position.y = 2.6;
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.9, 12), gold);
+    shaft.position.y = 3.6;
+    const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 0.9, 30, 20, 1, true),
+        new THREE.MeshBasicMaterial({ color: '#ffe066', transparent: true, opacity: 0.16, depthWrite: false, side: THREE.DoubleSide }));
+    beam.position.y = 15;
+    const ring = new THREE.Mesh(new THREE.RingGeometry(1.1, 1.45, 32).rotateX(-Math.PI / 2),
+        new THREE.MeshBasicMaterial({ color: '#f6c21a', transparent: true, opacity: 0.8, depthWrite: false }));
+    ring.position.y = 0.06;
+    tutoArrow.add(cone, shaft, beam, ring);
+    tutoArrow.userData.bob = [cone, shaft];
+    tutoArrow.userData.ring = ring;
+    tutoArrow.visible = false;
+    scene.add(tutoArrow);
+}
+function tutoArrowAt(p) {
+    tutoArrow.visible = !!p;
+    if (p) tutoArrow.position.set(p.x, groundAt(p.x, 6, p.z), p.z);
+}
+function updateTutoArrow(t) {
+    if (!tutoArrow.visible) return;
+    const b = Math.sin(t * 4) * 0.3;
+    tutoArrow.userData.bob[0].position.y = 2.6 + b;
+    tutoArrow.userData.bob[1].position.y = 3.6 + b;
+    const r = 1 + (t * 0.8 % 1) * 0.5;
+    tutoArrow.userData.ring.scale.set(r, 1, r);
+    tutoArrow.userData.ring.material.opacity = 0.8 * (1.5 - r) * 2;
+}
+
+function tutoHighlight(sel) {
+    for (const b of tutoHi) b.classList.remove('tutoHi');
+    tutoHi = sel ? [...document.querySelectorAll(sel)] : [];
+    for (const b of tutoHi) b.classList.add('tutoHi');
+}
 function tutoShow(i) {
     tutoStep = i;
-    if (tutoHi) tutoHi.classList.remove('tutoHi');
-    tutoHi = null;
     const step = TUTO[i];
-    el('tutoStep').textContent = `📖 Partie guidée · étape ${i + 1} / ${TUTO.length}`;
-    el('tutoText').innerHTML = step.text();
-    el('tutoDots').textContent = TUTO.map((_, j) => (j < i ? '●' : j === i ? '◉' : '○')).join('');
-    el('tutoNext').style.display = step.last ? '' : 'none';
+    setText(el('tutoStep'), `📖 Partie guidée · leçon ${i + 1} / ${TUTO.length}`);
+    setHTML(el('tutoText'), step.text());
+    el('tutoBar').style.width = `${i / (TUTO.length - 1) * 100}%`;
+    el('tutoNext').textContent = step.last ? "C'est parti !" : 'Compris !';
+    el('tutoNext').style.display = step.last || step.info ? '' : 'none';
+    el('tutoSkip').style.display = step.last ? 'none' : '';
+    el('tuto').classList.remove('tip');
+    el('tuto').classList.remove('show');
+    void el('tuto').offsetWidth;                // relance l'animation d'entrée
     el('tuto').classList.add('show');
-    if (step.hi) { tutoHi = document.querySelector(step.hi); tutoHi?.classList.add('tutoHi'); }
+    tutoHighlight(step.hi);
+    tutoArrowAt(step.at?.());
 }
+function tutoNextStep() {
+    play('heal');
+    tutoShow(tutoStep + 1);
+}
+// fin de la leçon (ou leçon passée) : l'IA se réveille
 function tutoFinish() {
     if (tutoStep < 0) return;
     tutoStep = -1;
-    if (tutoHi) tutoHi.classList.remove('tutoHi');
+    tutoHighlight(null);
+    tutoArrowAt(null);
     el('tuto').classList.remove('show');
     send({ t: 'tutorialDone' });
     try { localStorage.setItem('deuxCouronnes.tutoDone', '1'); } catch { /* tant pis */ }
 }
-function tutoUpdate(s) {
-    if (!tutorialMode || tutoStep < 0 || phase !== 'playing') return;
-    if (!tutoStart && player) tutoStart = pos.clone();
-    const step = TUTO[tutoStep];
-    if (!step.last && step.done(s)) {
-        play('heal');
-        tutoShow(tutoStep + 1);
-    }
+function tutoTip(tip) {
+    tutoTipsSeen.add(tip.id);
+    play('horn');
+    setText(el('tutoStep'), '💡 Conseil du Chambellan');
+    setHTML(el('tutoText'), tip.text());
+    el('tutoBar').style.width = '100%';
+    el('tutoNext').textContent = 'Compris !';
+    el('tutoNext').style.display = '';
+    el('tutoSkip').style.display = 'none';
+    el('tuto').classList.add('tip');
+    el('tuto').classList.remove('show');
+    void el('tuto').offsetWidth;
+    el('tuto').classList.add('show');
+    tutoHighlight(tip.hi);
+    if (tip.at) tutoArrowAt(tip.at());
+    tutoTipTimer = tip.keep ? Infinity : 14;
 }
-el('tutoSkip').addEventListener('click', tutoFinish);
-el('tutoNext').addEventListener('click', tutoFinish);
+function tutoCloseTip() {
+    el('tuto').classList.remove('show');
+    tutoHighlight(null);
+    tutoTipTimer = 0;
+}
+function tutoUpdate(s) {
+    if (!tutorialMode || phase !== 'playing') return;
+    if (tutoStep >= 0) {
+        if (!tutoStart && player) tutoStart = pos.clone();
+        const step = TUTO[tutoStep];
+        setHTML(el('tutoText'), step.text());        // compteurs et or manquant à jour
+        if (step.done?.(s)) tutoNextStep();
+        return;
+    }
+    if (!tutoLesson) return;
+    // conseils : un à la fois, laissé quelques secondes à l'écran ; un conseil urgent remplace le précédent
+    const urgent = TUTO_TIPS.find(t => t.urgent && !tutoTipsSeen.has(t.id) && t.when(s));
+    if (urgent) return tutoTip(urgent);
+    if (tutoTipTimer > 0) {
+        tutoTipTimer -= 0.05;
+        if (tutoTipTimer <= 0) tutoCloseTip();
+        return;
+    }
+    const tip = TUTO_TIPS.find(t => !tutoTipsSeen.has(t.id) && t.when(s));
+    if (tip) tutoTip(tip);
+}
+el('tutoSkip').addEventListener('click', () => { tutoFinish(); tutorialMode = false; });
+el('tutoNext').addEventListener('click', () => {
+    el('tutoNext').blur();
+    if (tutoStep < 0) return tutoCloseTip();
+    const step = TUTO[tutoStep];
+    if (step.last) { tutoLesson = true; tutoFinish(); }
+    else if (step.info) tutoNextStep();
+});
 el('tutoBtn').addEventListener('click', () => {
     tutorialMode = true;
     lastAction = 'solo';
@@ -1819,7 +2056,7 @@ function updateHud(s, kingHp) {
         const { state, cd } = spellState(key);
         const locked = state.startsWith('locked');
         if (!locked) anyBuilt = true;
-        const cls = `spellBtn ${locked ? 'locked' : ''} ${state}${key === 'fireball' && aiming ? ' aiming' : ''}${b === tutoHi ? ' tutoHi' : ''}`;
+        const cls = `spellBtn ${locked ? 'locked' : ''} ${state}${key === 'fireball' && aiming ? ' aiming' : ''}${tutoHi.includes(b) ? ' tutoHi' : ''}`;
         if (changed(b, 'c', cls)) b.className = cls;
         setHTML(b.querySelector('.saction'), {
             locked: `🏗️ Bâtir · ${m.build}`, lockedPoor: `🏗️ Bâtir · ${m.build}`,
@@ -1964,6 +2201,7 @@ function render(now) {
         camera.updateProjectionMatrix();
     }
     quality.frame((now - last) / 1000);
+    updateFps((now - last) / 1000);
     const dt = THREE.MathUtils.clamp((now - last) / 1000, 0, 0.05);
     last = now;
     const t = now / 1000;
@@ -1994,6 +2232,7 @@ function render(now) {
     updateBubbles();
     updateDragons(dt, t);
     updateAim();
+    updateTutoArrow(t);
     if (lastSnap) updateSmoke(dt, lastSnap.hp);
 
     // entrée dans une salle des coffres

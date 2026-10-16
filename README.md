@@ -53,13 +53,15 @@ Jeu 3D dans le navigateur, réalisé avec [Three.js](https://threejs.org/) et un
 
 **Cris rapides** : le bouton 📣 fait crier ton roi (« Oyez, oyez ! », « À l'attaque ! », « Bien joué ! »…), dans une bulle visible de tous.
 
-**Partie guidée** : depuis l'accueil, une partie solo pas à pas (se déplacer, former une troupe, le pont-levis, les ordres, une tour de mage, les barricades) pendant laquelle l'IA attend que la leçon soit finie.
+**Partie guidée** : depuis l'accueil, une partie solo pas à pas (se déplacer, courir et sauter, l'or, chaque troupe et ses forces et faiblesses, les engins de siège, le pont-levis, les ordres, l'épée du roi, les barricades, la magie, comment gagner) pendant laquelle l'IA attend que la leçon soit finie ; une flèche dorée montre où aller. Ensuite, le Chambellan glisse des conseils au bon moment pendant la bataille.
 
 **Fin de partie** : un tableau compare les deux royaumes (troupes formées, abattues et perdues, or gagné, dégâts au château, sorts, constructions, rois tombés) et donne la durée de la bataille.
 
 **Son** : bruitages et musique de boîte à musique sont synthétisés en direct dans le navigateur (aucun fichier audio). Les boutons 🔊 et 🎵, en haut à droite, coupent les bruitages ou la musique ; le choix est mémorisé.
 
-**Qualité de l'image** : le bouton ⚙️ choisit entre *Auto* (par défaut : la définition de l'image s'adapte toute seule à l'appareil pour rester fluide), *Belle*, *Équilibrée* et *Rapide* (pour les petits appareils : sans ombres ni lumières des torches). Le choix est mémorisé.
+**Réglages** : le bouton ⚙️ (en jeu comme à l'accueil) ouvre la fenêtre des réglages : volume des bruitages et de la musique, vitesse et inversion de la caméra, mini-carte, compteur d'images par seconde, éclair rouge quand le château est touché, plein écran, rappel des touches, « Revoir la partie guidée », et les **mentions légales**. Tout est mémorisé dans le navigateur.
+
+**Qualité de l'image** : dans les réglages, au choix *Auto* (par défaut : la définition de l'image s'adapte toute seule à l'appareil pour rester fluide), *Belle*, *Équilibrée* et *Rapide* (pour les petits appareils : sans ombres ni lumières des torches). Le choix est mémorisé.
 
 ## Modes de jeu
 
