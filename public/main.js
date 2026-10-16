@@ -224,6 +224,7 @@ const handlers = {
         MAGES = m.mages; MAGE_KEYS = m.mageKeys; DRAGON_Y = m.dragonY;
         buildSpells();
         lastHp = [CASTLE_HP, CASTLE_HP];
+        applyMode(m);
         setupPlayer();
         buildShop();
         document.body.dataset.team = myTeam;
@@ -232,15 +233,17 @@ const handlers = {
             ` (code <b>${m.room.id}</b>)${m.room.locked ? ' avec le mot de passe 🔒' : ''}.`;
     },
     s: onSnapshot,
-    start() {
+    start(m) {
         for (const c of Object.values(castles)) { restoreCastle(c); c.resetDefense(); }
         play('fanfare');
         ui.over.classList.remove('show');
-        toast("🎺 Sonnez trompettes ! Fais céder le pont-levis d'en face, puis file jusqu'à son trésor !", 5);
+        applyMode(m);
+        modeStart();
     },
     over(m) {
         play(m.winner === myTeam ? 'victory' : 'defeat');
         if (m.stats) showOverStats(m.stats, m.duration || 0);
+        onOver(m);
         tutoFinish();
         tutorialMode = false;
         tutoCloseTip();
@@ -413,7 +416,7 @@ window.addEventListener('keydown', e => {
     if (e.code === 'Escape') setAiming(false);
     const spell = MAGE_KEYS.find(k => e.code === 'Key' + MAGES[k].key);
     if (spell) useSpell(spell, true);
-    const ord = { KeyV: 'attack', KeyB: 'defend', KeyN: 'follow' }[e.code];
+    const ord = { KeyV: 'attack', KeyB: 'defend', KeyN: 'follow', KeyM: gameMode === 'hill' ? 'hill' : null }[e.code];
     if (ord) giveOrder(ord);
     if (e.code === 'KeyE' && nearOwnGate() && !castles[myTeam].door.broken) send({ t: 'door' });
     const n = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6'].indexOf(e.code);
@@ -692,7 +695,7 @@ function renderRooms() {
         return `<button class="roomCard" data-room="${r.id}" ${cls === 'full' ? 'disabled' : ''}>
             <div class="rcTop"><span class="rcName">${escapeHtml(r.name)}</span>${r.locked ? '<span class="rcLock" title="Mot de passe">🔒</span>' : ''}</div>
             ${seatsHtml(r)}
-            <div class="rcBottom"><span class="chip ${cls}">${label}</span><span class="rcCode">#${r.id}</span></div>
+            <div class="rcBottom"><span class="chip ${cls}">${label}</span>${r.mode && r.mode !== 'classic' && MODE_CARDS[r.mode] ? `<span class="chip mode" title="${MODE_CARDS[r.mode].name}">${MODE_CARDS[r.mode].ico} ${MODE_CARDS[r.mode].name}</span>` : ''}<span class="rcCode">#${r.id}</span></div>
         </button>`;
     }).join('');
 }
@@ -736,9 +739,9 @@ function refreshJoin() {
 
 // ---- messages du serveur pour le menu
 function menuRefused(text) {
-    (lastAction === 'solo' ? mui.soloNote : lastAction === 'create' ? mui.createNote : lastAction === 'join' ? mui.joinNote : mui.multiNote).textContent = text;
+    (lastAction === 'solo' ? mui.soloNote : lastAction === 'campaign' ? el('campNote') : lastAction === 'create' ? mui.createNote : lastAction === 'join' ? mui.joinNote : mui.multiNote).textContent = text;
 }
-const MENU_BUTTONS = '#menu .tile, #soloBtn, #createBtn, #joinBtn';
+const MENU_BUTTONS = '#menu .tile, #soloBtn, #campBtn, #createBtn, #joinBtn';
 function menuOffline() {
     for (const b of document.querySelectorAll(MENU_BUTTONS)) b.disabled = true;
     el('homeNote').innerHTML = `Le château ne répond pas 😢 Le jeu a besoin de son serveur, même en solo. Nouvelle tentative en cours…`;
@@ -790,7 +793,7 @@ window.addEventListener('keydown', e => { if (inMenu && e.key === 'Escape') clos
 mui.soloBtn.addEventListener('click', () => {
     lastAction = 'solo';
     mui.soloNote.textContent = '';
-    send({ t: 'solo', team: menuTeam, level: menuLevel });
+    send({ t: 'solo', team: menuTeam, level: menuLevel, mode: menuMode });
 });
 
 mui.roomLocked.addEventListener('change', () => {
@@ -802,7 +805,7 @@ mui.createBtn.addEventListener('click', () => {
     const locked = mui.roomLocked.checked;
     if (locked && !mui.roomPass.value) { mui.createNote.textContent = "Choisis un mot de passe pour garder ton salon secret."; mui.roomPass.focus(); return; }
     mui.createNote.textContent = '';
-    send({ t: 'create', name: mui.roomName.value, password: locked ? mui.roomPass.value : '', team: menuTeam });
+    send({ t: 'create', name: mui.roomName.value, password: locked ? mui.roomPass.value : '', team: menuTeam, mode: createMode });
 });
 for (const input of [mui.roomName, mui.roomPass]) input.addEventListener('keydown', e => { if (e.key === 'Enter') mui.createBtn.click(); });
 
@@ -1205,13 +1208,197 @@ el('tutoBtn').addEventListener('click', () => {
 try { if (!localStorage.getItem('deuxCouronnes.tutoDone')) el('tutoBtn').classList.add('suggest'); } catch { /* tant pis */ }
 
 // =====================================================================
+//  MODES DE JEU : classique, éclair, roi de la colline, siège en vagues, campagne
+// =====================================================================
+const MODE_CARDS = {
+    classic: { ico: '⚔️', name: 'Classique', sub: 'Brise le pont-levis, file au trésor' },
+    blitz: { ico: '⚡', name: 'Éclair', sub: 'Châteaux fragiles, coffres pleins : 5 minutes' },
+    hill: { ico: '🚩', name: 'Colline', sub: 'Tiens le drapeau du centre 3 minutes' },
+    waves: { ico: '🌊', name: 'Vagues', sub: 'Tiens bon face aux vagues ennemies', solo: true },
+};
+const MODE_START = {
+    classic: "🎺 Sonnez trompettes ! Fais céder le pont-levis d'en face, puis file jusqu'à son trésor !",
+    blitz: '⚡ Bataille éclair ! Châteaux fragiles et coffres pleins : tout se joue en quelques minutes !',
+    hill: '🚩 Le roi de la colline ! Tiens seul le drapeau du centre pendant 3 minutes (ordre « Colline », touche M).',
+    waves: "🌊 Siège en vagues ! Le château d'en face est imprenable : repousse ses vagues aussi longtemps que possible.",
+};
+// la campagne : le récit de chaque bataille (les règles sont sur le serveur, dans CAMPAIGN)
+const foeName = () => (myTeam === 'red' ? 'le Lion' : 'le Crâne');
+const CAMPAIGN_STORY = [
+    { ico: '🌙', title: 'La première nuit', sub: "Contre l'Écuyer, sans règle spéciale",
+      text: () => `La lumière vient de s'éteindre dans la chambre. Au bout du tapis, ${foeName()} s'éveille à peine : c'est le moment de lui montrer qui règne ici !`,
+      rule: '📜 Règle : aucune. Une bataille classique contre un roi encore endormi.' },
+    { ico: '📕', title: 'Le grimoire égaré', sub: 'Personne ne peut bâtir de tour de mage',
+      text: () => `Le chat a renversé l'étagère : tous les grimoires ont glissé sous le lit ! Ni toi ni ${foeName()} ne pourrez compter sur la magie.`,
+      rule: '🚫 Règle : aucune tour de mage, aucun sort. Seuls tes soldats et tes engins comptent.' },
+    { ico: '🪙', title: 'Les coffres vides', sub: "L'or se fait rare pour tout le monde",
+      text: () => `Une souris a grignoté le fond des coffres du royaume. Chaque pièce compte : ${foeName()} est aussi pauvre que toi… ou presque.`,
+      rule: "🪙 Règle : 150 pièces au départ et des revenus réduits de moitié environ. Ne gaspille rien !" },
+    { ico: '🐉', title: "Le dragon d'en face", sub: "L'ennemi commence avec toutes ses tours de mage",
+      text: () => `${foeName()[0].toUpperCase() + foeName().slice(1)} a apprivoisé un dragon ! Ses trois tours de mage sont déjà debout et son coffre est bien rempli.`,
+      rule: "🔥 Règle : l'ennemi a dès le début la potion, la boule de feu et le dragon. Garde des troupes en réserve !" },
+    { ico: '🏰', title: 'Le siège final', sub: "Un roi rusé derrière des murs renforcés",
+      text: () => `Voici l'ultime bataille ! ${foeName()[0].toUpperCase() + foeName().slice(1)} s'est retranché derrière des tours renforcées, des barricades et un chaudron d'huile. Il est rusé et riche.`,
+      rule: "🛡️ Règle : l'ennemi (difficile) commence avec ses tours niveau 3, l'huile bouillante et des barricades. Amène des engins de siège !" },
+];
+let gameMode = 'classic', gameStage = 0, HILL_WIN = 180, lastOver = null;
+let menuMode = 'classic', createMode = 'classic', campStage = 0;
+const campDone = () => { try { return Math.min(CAMPAIGN_STORY.length, +localStorage.getItem('deuxCouronnes.campagne') || 0); } catch { return 0; } };
+const waveRecord = () => { try { return +localStorage.getItem('deuxCouronnes.vagues') || 0; } catch { return 0; } };
+
+function applyMode(m) {
+    gameMode = m.mode || 'classic';
+    gameStage = m.stage || 0;
+    HILL_WIN = m.hillWin || 180;
+    if (m.castleHp) { CASTLE_HP = m.castleHp; lastHp = [CASTLE_HP, CASTLE_HP]; }
+    document.body.classList.toggle('modeHill', gameMode === 'hill');
+    document.body.classList.toggle('noMagic', !!m.noMagic);
+    hillFlag.visible = gameMode === 'hill';
+    el('modeBar').className = `panel ${gameMode === 'hill' || gameMode === 'waves' ? 'show' : ''} ${gameMode === 'hill' ? 'hill' : ''}`;
+}
+// début de partie : récit de la campagne, ou rappel du mode
+function modeStart() {
+    if (gameMode === 'campaign') {
+        const st = CAMPAIGN_STORY[gameStage];
+        setText(el('storyStage'), `📜 Campagne du tapis · bataille ${gameStage + 1} / ${CAMPAIGN_STORY.length}`);
+        setText(el('storyTitle'), `${st.ico} ${st.title}`);
+        setText(el('storyText'), st.text());
+        setText(el('storyRule'), st.rule);
+        el('story').classList.add('show');
+        return;
+    }
+    if (!tutorialMode) toast(MODE_START[gameMode] || MODE_START.classic, 6);
+}
+el('storyGo').addEventListener('click', () => {
+    el('story').classList.remove('show');
+    el('storyGo').blur();
+    send({ t: 'tutorialDone' });         // l'IA attendait la fin du récit
+    toast("🎺 Sonnez trompettes ! Que la bataille commence !", 4);
+});
+
+// barre du mode, sous les barres de vie : drapeau de la colline ou compteur de vagues
+function updateModeBar(s) {
+    const bar = el('modeBar');
+    if (s.hl) {
+        const [r, b, owner, contested] = s.hl;
+        const who = contested ? '⚔️ Colline disputée !' : owner < 0 ? '🚩 Colline libre' : owner === myI() ? '🚩 Tu tiens la colline !' : "🚩 L'ennemi tient la colline !";
+        setHTML(bar, `<div>${who} <small>(${HILL_WIN} s pour gagner)</small></div>
+            <div class="hillTrack"><i class="hr" style="width:${(r / HILL_WIN * 50).toFixed(1)}%"></i><span class="hgap"></span><i class="hb" style="width:${(b / HILL_WIN * 50).toFixed(1)}%"></i></div>
+            <div style="display:flex;justify-content:space-between;font-size:12px"><span>💀 ${r} s</span><span>${b} s 🦁</span></div>`);
+        hillCloth.material.color.set(owner < 0 || contested ? '#f3ead8' : owner === 0 ? TEAM.red.main : TEAM.blue.main);
+    } else if (s.wv) {
+        const [wave, held, next] = s.wv;
+        setHTML(bar, `🌊 Vague ${wave} · 🛡️ ${held} repoussée${held > 1 ? 's' : ''} · prochaine dans ${next} s` + (waveRecord() ? ` · 🏆 record ${waveRecord()}` : ''));
+    }
+}
+
+// le drapeau de la colline, au centre du tapis, et le cercle à tenir
+const hillFlag = new THREE.Group();
+const hillCloth = new THREE.Mesh(new THREE.PlaneGeometry(1.8, 1.2).translate(0.9, 0, 0),
+    new THREE.MeshStandardMaterial({ color: '#f3ead8', roughness: 0.6, side: THREE.DoubleSide }));
+{
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.11, 4.6, 10), plastic('#6b4423', 0.6));
+    pole.position.y = 2.3;
+    const tip = new THREE.Mesh(new THREE.SphereGeometry(0.2, 12, 8), plastic('#e8b923', 0.3));
+    tip.position.y = 4.7;
+    hillCloth.position.y = 4;
+    const ring = new THREE.Mesh(new THREE.RingGeometry(6.2, 6.5, 64).rotateX(-Math.PI / 2),
+        new THREE.MeshBasicMaterial({ color: '#f6c21a', transparent: true, opacity: 0.7, depthWrite: false }));
+    ring.position.y = 0.05;
+    hillFlag.add(pole, tip, hillCloth, ring);
+    hillFlag.traverse(o => { if (o.isMesh && o !== ring) o.castShadow = true; });
+    hillFlag.position.set(0, groundAt(0, 6, 0), 0);
+    hillFlag.visible = false;
+    scene.add(hillFlag);
+}
+
+// écran de fin selon le mode
+function overTexts(won) {
+    const m = lastOver || {};
+    if (m.how === 'waves') {
+        const n = m.waves || 0, best = waveRecord();
+        if (n > best) { try { localStorage.setItem('deuxCouronnes.vagues', String(n)); } catch { /* tant pis */ } }
+        return ['🌊 Le château est tombé…', `Tu as repoussé ${n} vague${n > 1 ? 's' : ''} avant la chute de ton château. ` +
+            (n > best ? '🏆 Nouveau record du royaume !' : `Ton record : ${best} vague${best > 1 ? 's' : ''}.`)];
+    }
+    if (m.how === 'hill') {
+        return won ? ['🚩 Victoire !', 'Ton drapeau a flotté sur la colline assez longtemps : le tapis entier te salue !']
+            : ['💥 Défaite…', "Le drapeau d'en face a flotté trop longtemps sur la colline… Prends ta revanche !"];
+    }
+    if (gameMode === 'campaign' && won) {
+        const last = gameStage >= CAMPAIGN_STORY.length - 1;
+        return [last ? '👑 La campagne est gagnée !' : `👑 Bataille ${gameStage + 1} gagnée !`,
+            last ? 'Tu as remporté les cinq batailles du tapis : tu es le plus grand roi de la chambre !'
+                : `Prochaine bataille : ${CAMPAIGN_STORY[gameStage + 1].ico} ${CAMPAIGN_STORY[gameStage + 1].title}.`];
+    }
+    return won ? ['👑 Victoire !', "Ton roi a mis la main sur le trésor d'en face ! Tout le royaume fait la fête."]
+        : ['💥 Défaite…', "Le roi d'en face a filé avec ton trésor… Prends ta revanche !"];
+}
+function onOver(m) {
+    lastOver = m;
+    const won = m.winner === myTeam;
+    // campagne : la bataille gagnée débloque la suivante
+    const next = gameMode === 'campaign' && won && gameStage < CAMPAIGN_STORY.length - 1;
+    if (gameMode === 'campaign' && won && campDone() < gameStage + 1) {
+        try { localStorage.setItem('deuxCouronnes.campagne', String(gameStage + 1)); } catch { /* tant pis */ }
+    }
+    el('overNext').classList.toggle('show', next);
+    el('story').classList.remove('show');
+}
+el('overNext').addEventListener('click', () => send({ t: 'restart', next: true }));
+
+// ---- menu : choix du mode (solo et salon) et de la bataille de la campagne
+function renderModePickers() {
+    for (const box of document.querySelectorAll('[data-mode-picker]')) {
+        const solo = box.dataset.modePicker === 'solo';
+        const cur = solo ? menuMode : createMode;
+        box.innerHTML = Object.entries(MODE_CARDS).filter(([, c]) => solo || !c.solo).map(([k, c]) =>
+            `<button class="modeCard ${k === cur ? 'sel' : ''}" data-mode="${k}"><span class="mdIco">${c.ico}</span><b>${c.name}</b><small>${c.sub}</small></button>`).join('');
+    }
+    // en mode vagues, pas d'adversaire à choisir : les vagues grossissent toutes seules
+    const lv = document.querySelector('[data-view="solo"] .levelCards');
+    lv.style.display = menuMode === 'waves' ? 'none' : '';
+    lv.previousElementSibling.style.display = menuMode === 'waves' ? 'none' : '';
+}
+function renderStages() {
+    const done = campDone();
+    if (campStage > done) campStage = Math.min(done, CAMPAIGN_STORY.length - 1);
+    el('stageList').innerHTML = CAMPAIGN_STORY.map((st, i) => {
+        const locked = i > done, won = i < done;
+        return `<button class="stageCard ${i === campStage ? 'sel' : ''}" data-stage="${i}" ${locked ? 'disabled' : ''}>
+            <span class="stNum">${locked ? '🔒' : won ? '✅' : st.ico}</span>
+            <span><b>${i + 1}. ${st.title}</b><small>${locked ? 'Gagne la bataille précédente pour la débloquer' : st.sub}</small></span></button>`;
+    }).join('');
+}
+document.addEventListener('click', e => {
+    const mode = e.target.closest('[data-mode]');
+    if (mode) {
+        if (mode.closest('[data-mode-picker="solo"]')) menuMode = mode.dataset.mode;
+        else createMode = mode.dataset.mode;
+        renderModePickers();
+        return;
+    }
+    const stage = e.target.closest('[data-stage]');
+    if (stage && !stage.disabled) { campStage = +stage.dataset.stage; renderStages(); }
+});
+el('campBtn').addEventListener('click', () => {
+    lastAction = 'campaign';
+    el('campNote').textContent = '';
+    send({ t: 'solo', team: menuTeam, mode: 'campaign', stage: campStage });
+});
+renderModePickers();
+campStage = Math.min(campDone(), CAMPAIGN_STORY.length - 1);
+renderStages();
+
+// =====================================================================
 //  ORDRES AUX TROUPES
 // =====================================================================
-const ORDER_MODES = ['attack', 'defend', 'follow'];
+const ORDER_MODES = ['attack', 'defend', 'follow', 'hill'];
 const ORDER_HINT = {
     attack: 'Tes troupes marchent sur le château ennemi.',
     defend: 'Tes troupes tiennent la ligne devant ton pont-levis (sous l\'étendard).',
     follow: 'Tes troupes escortent ton roi, même jusque dans le château ennemi.',
+    hill: 'Tes troupes se postent autour du drapeau de la colline.',
 };
 function giveOrder(mode) {
     if (phase !== 'playing' || !lastSnap) return;
@@ -1926,6 +2113,7 @@ function onSnapshot(s) {
     });
     setBattle(s.ph === 'playing');
     tutoUpdate(s);
+    updateModeBar(s);
     refreshOrders(s);
     castles.red.setMages(Object.fromEntries(MAGE_KEYS.map((k, j) => [k, s.mg[0][j]])));
     castles.blue.setMages(Object.fromEntries(MAGE_KEYS.map((k, j) => [k, s.mg[1][j]])));
@@ -1960,8 +2148,8 @@ function buildShop() {
         const b = document.createElement('button');
         b.className = 'unitBtn';
         b.dataset.type = type;
-        const strong = Object.keys(COUNTERS[type] || {}).filter(t => COUNTERS[type][t] >= 2);
-        const weak = TYPES.filter(t => (COUNTERS[t]?.[type] ?? 1) >= 2);
+        const strong = Object.keys(COUNTERS[type] || {}).filter(t => COUNTERS[type][t] > 1);
+        const weak = TYPES.filter(t => (COUNTERS[t]?.[type] ?? 1) > 1);
         const names = list => list.map(t => UNITS[t].name.toLowerCase()).join(', ');
         b.title = `${u.name} : coûte ${u.cost}, rapporte ${u.bounty} à l'ennemi qui l'abat · ${u.train} s de formation ` +
             `(${u.building === 'barracks' ? 'caserne, ou chapiteau s\'il est dressé' : 'atelier de siège'})` +
@@ -2086,10 +2274,9 @@ function updateHud(s, kingHp) {
     } else ui.lobby.classList.remove('show');
 
     if (phase === 'over') {
-        const won = winner === myTeam;
-        ui.overTitle.textContent = won ? '👑 Victoire !' : '💥 Défaite…';
-        ui.overText.textContent = won ? "Ton roi a mis la main sur le trésor d'en face ! Tout le royaume fait la fête."
-            : "Le roi d'en face a filé avec ton trésor… Prends ta revanche !";
+        const [title, text] = overTexts(winner === myTeam);
+        setText(ui.overTitle, title);
+        setText(ui.overText, text);
         ui.over.classList.add('show');
     }
 }

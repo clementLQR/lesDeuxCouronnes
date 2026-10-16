@@ -155,6 +155,36 @@ const LEVELS = {
     hard:   { think: 0.6, income: 1.3,  door: true },
 };
 
+// ---------------------------------------------------------------- modes de jeu
+// chaque salon a son mode ; une partie solo peut aussi être une bataille de la campagne (stage)
+// castleHp / startGold / income : remplacent les valeurs habituelles ; noMagic : pas de tour de mage
+const MODES = {
+    classic: { name: 'Bataille classique', icon: '⚔️' },
+    // parties d'environ 5 minutes : châteaux fragiles, coffres pleins dès le départ
+    blitz:   { name: 'Bataille éclair', icon: '⚡', castleHp: 1000, startGold: 900, income: 1.5 },
+    // un drapeau au centre du tapis : le royaume qui le tient assez longtemps gagne (on peut aussi gagner au trésor)
+    hill:    { name: 'Le roi de la colline', icon: '🚩', hill: true },
+    // solo : des vagues d'ennemis de plus en plus fortes ; on compte les vagues repoussées
+    waves:   { name: 'Siège en vagues', icon: '🌊', waves: true, soloOnly: true },
+    campaign: { name: 'Campagne du tapis', icon: '📜', soloOnly: true },
+};
+const HILL = { r: 6.5, win: 180 };          // rayon de la colline, secondes de contrôle pour gagner
+const WAVES = { first: 25, every: 42, bonus: 40 };
+// la campagne : une suite de batailles contre l'IA, chacune avec sa petite histoire et sa règle spéciale
+// (le texte est sur le client ; ici, seulement les règles)
+const CAMPAIGN = [
+    { level: 'easy' },                                                   // la première nuit
+    { level: 'normal', noMagic: true },                                  // le grimoire égaré : pas de magie
+    { level: 'normal', startGold: 150, income: 0.6 },                    // les coffres vides : or rare
+    { level: 'normal', enemyMages: ['potion', 'fireball', 'dragon'], enemyGold: 500 },   // le dragon d'en face
+    { level: 'hard', enemyDef: { towers: 2, oil: 1, barricade: 1 } },    // le siège final
+];
+function rulesOf(mode, stage = 0) {
+    const base = { castleHp: CASTLE_HP, startGold: START_GOLD, income: 1 };
+    if (mode === 'campaign') return { ...base, ...CAMPAIGN[stage] };
+    return { ...base, ...(MODES[mode] || MODES.classic) };
+}
+
 // Chaque château est construit dans son repère local : façade vers +z local.
 // Rouge : centré en z = -40 (façade vers +z monde) ; Bleu : z = +40, tourné de 180°.
 const dirOf = team => (team === 'red' ? 1 : -1);
@@ -213,12 +243,14 @@ function earn(team, amount) {
     game.stats[team].earned += amount;
 }
 
-function newGame(phase = 'waiting') {
+function newGame(phase = 'waiting', mode = 'classic', stage = 0) {
+    const rules = rulesOf(mode, stage);
     game = {
         phase,                                   // waiting | playing | over
         winner: null,
-        gold: { red: START_GOLD, blue: START_GOLD },
-        hp: { red: CASTLE_HP, blue: CASTLE_HP },
+        mode, stage, rules,                      // mode de jeu (MODES), bataille de la campagne, règles qui en découlent
+        gold: { red: rules.startGold, blue: rules.startGold },
+        hp: { red: rules.castleHp, blue: rules.castleHp },
         door: { red: true, blue: true },         // true = pont-levis baissé
         broken: { red: false, blue: false },     // château à 0 PV : pont-levis bloqué baissé
         queue: { red: { barracks: [], workshop: [], tent: [] }, blue: { barracks: [], workshop: [], tent: [] } },
@@ -247,6 +279,8 @@ function newGame(phase = 'waiting') {
         aiDefSave: { red: null, blue: null },    // prix de la défense pour laquelle l'IA assiégée économise
         aiRelease: { red: false, blue: false },  // l'IA vient de baisser son pont-levis pour lâcher une vague
         peace: false,                            // partie guidée : l'IA attend la fin de la leçon
+        hill: { red: 0, blue: 0, owner: null, contested: false, said: { red: 0, blue: 0 } },   // roi de la colline
+        wave: 0, waveNext: WAVES.first, waveHeld: 0, waveSpawn: [], wavesOpen: [],                            // siège en vagues
         // statistiques affichées à la fin : par royaume
         stats: { red: newStats(), blue: newStats() },
     };
@@ -263,12 +297,120 @@ function humans(team) {
 }
 
 function startGame() {
-    const { ai, level } = game;
-    newGame('playing');
+    const { ai, level, mode, stage } = game;
+    newGame('playing', mode, stage);
     game.ai = { red: ai.red && !humans('red'), blue: ai.blue && !humans('blue') };
-    game.level = level;
+    game.level = game.rules.level || level;
+    // campagne : le royaume de l'IA commence avec ses tours de mage, son or ou ses défenses
+    for (const t of TEAMS) {
+        if (!game.ai[t]) continue;
+        for (const k of game.rules.enemyMages || []) game.mage[t][k] = true;
+        if (game.rules.enemyGold) game.gold[t] = game.rules.enemyGold;
+        for (const [k, lv] of Object.entries(game.rules.enemyDef || {})) {
+            game.def[t][k] = lv;
+            if (DEFENSES[k].levels[lv]?.hp) game.defHp[t][k] = DEFENSES[k].levels[lv].hp;
+        }
+    }
+    // campagne : l'IA attend que le joueur ait lu le récit de la bataille (message « tutorialDone »)
+    game.peace = game.mode === 'campaign';
     for (const p of players.values()) crown(p, false);
-    broadcast({ t: 'start' });
+    broadcast({ t: 'start', ...modeInfo() });
+}
+// ce que le client doit savoir du mode (barres de vie, panneaux)
+function modeInfo() {
+    return { mode: game.mode, stage: game.stage, castleHp: game.rules.castleHp, hillWin: HILL.win, noMagic: !!game.rules.noMagic };
+}
+
+// ---------------------------------------------------------------- roi de la colline
+// le drapeau du centre est tenu par le seul royaume qui a des troupes (ou son roi) tout près ;
+// s'ils y sont tous les deux, il est disputé et le compte s'arrête
+function updateHill(dt) {
+    const near = { red: 0, blue: 0 };
+    for (const u of game.units) if (!u.inside && Math.hypot(u.x, u.z) < HILL.r) near[u.team]++;
+    for (const p of players.values()) if (!p.dead && Math.hypot(p.x, p.z) < HILL.r) near[p.team] += 2;
+    const h = game.hill;
+    h.contested = near.red > 0 && near.blue > 0;
+    const holder = h.contested ? null : near.red ? 'red' : near.blue ? 'blue' : null;
+    if (holder && holder !== h.owner) {
+        h.owner = holder;
+        broadcast({ t: 'msg', text: `🚩 Le royaume ${whoOf(holder)} plante son drapeau sur la colline !` });
+    }
+    if (!holder) return;
+    h[holder] += dt;
+    // annonces à mi-chemin et à l'approche de la victoire
+    for (const [part, text] of [[0.5, 'tient la colline depuis longtemps : la moitié du chemin vers la victoire !'], [0.8, 'va bientôt remporter la colline : chassez-le vite !']]) {
+        if (h[holder] >= HILL.win * part && h.said[holder] < part) {
+            h.said[holder] = part;
+            broadcast({ t: 'msg', text: `🚩 Le royaume ${whoOf(holder)} ${text}` });
+        }
+    }
+    if (h[holder] >= HILL.win) endGame(holder, 'hill');
+}
+
+// ---------------------------------------------------------------- siège en vagues
+// l'ennemi n'a ni or ni IA : des vagues sortent de son château, de plus en plus fortes. Chaque vague repoussée
+// rapporte une prime ; la partie s'arrête quand le château du joueur tombe.
+function waveArmy(n) {
+    let budget = 110 + n * 75 + n * n * 7;
+    const pool = ['infantry', 'infantry', 'archer'];
+    if (n >= 2) pool.push('archer', 'knight');
+    if (n >= 4) pool.push('knight', 'ram');
+    if (n >= 5) pool.push('cannon');
+    if (n >= 7) pool.push('catapult', 'knight');
+    const army = [];
+    while (budget >= UNITS.infantry.cost && army.length < 30) {
+        const type = pool[Math.floor(Math.random() * pool.length)];
+        if (UNITS[type].cost > budget) { if (type === 'infantry') break; continue; }
+        budget -= UNITS[type].cost;
+        army.push(type);
+    }
+    return army;
+}
+function updateWaves(dt) {
+    const human = TEAMS.find(t => !game.ai[t]) || 'red', foe = enemyOf(human);
+    // les troupes de la vague sortent une à une
+    if (game.waveSpawn.length) {
+        game.waveSpawn[0].t -= dt;
+        if (game.waveSpawn[0].t <= 0) {
+            const { type } = game.waveSpawn.shift();
+            spawnUnit(foe, type, UNITS[type].building);
+            game.units[game.units.length - 1].wave = game.wave;
+        }
+    }
+    // vague repoussée : toutes ses troupes sont sorties et plus aucune n'est debout
+    for (const n of [...game.wavesOpen]) {
+        if ((n === game.wave && game.waveSpawn.length) || game.units.some(u => u.wave === n)) continue;
+        game.wavesOpen.splice(game.wavesOpen.indexOf(n), 1);
+        game.waveHeld++;
+        const bonus = WAVES.bonus + n * 10;
+        earn(human, bonus);
+        broadcast({ t: 'msg', text: `🎉 Vague ${n} repoussée ! Le royaume te verse ${bonus} pièces d'or.` });
+    }
+    game.waveNext -= dt;
+    if (game.waveNext > 0) return;
+    game.wave++;
+    game.wavesOpen.push(game.wave);
+    game.waveNext = Math.max(30, WAVES.every - game.wave);
+    const army = waveArmy(game.wave);
+    game.waveSpawn = army.map((type, i) => ({ type, t: i ? 0.7 : 0 }));
+    const boss = game.wave % 5 === 0;
+    broadcast({ t: 'msg', text: `🌊 Vague ${game.wave} : ${army.length} ennemis sortent du château d'en face${boss ? ', et leur dragon les accompagne !' : ' !'}` });
+    if (boss) {
+        const bot = [...players.values()].find(p => p.bot && p.team === foe && !p.dead);
+        if (bot) {
+            game.mage[foe].dragon = true;
+            game.gold[foe] += MAGES.dragon.cost;
+            game.spellCd[foe].dragon = 0;
+            castSpell(bot, 'dragon');
+        }
+    }
+}
+
+// fin de partie : vainqueur, et pourquoi (trésor, colline, château tombé en mode vagues)
+function endGame(winner, how = 'vault') {
+    game.phase = 'over';
+    game.winner = winner;
+    broadcast({ t: 'over', winner, how, waves: game.waveHeld, stats: game.stats, duration: Math.round((Date.now() - game.startedAt) / 1000) });
 }
 
 // ---------------------------------------------------------------- formation des troupes
@@ -334,12 +476,14 @@ function damageUnit(u, dmg, byTeam) {
 // à 0 PV, le château ne tombe pas : son pont-levis lâche et reste baissé pour de bon
 function damageCastle(team, dmg) {
     if (game.phase !== 'playing' || game.broken[team]) return;
+    if (game.rules.waves && game.ai[team]) return;
     game.stats[enemyOf(team)].castleDmg += Math.min(dmg, game.hp[team]);
     game.hp[team] = Math.max(0, game.hp[team] - dmg);
     if (game.hp[team] <= 0) {
         game.broken[team] = true;
         game.door[team] = true;
         broadcast({ t: 'msg', text: `💥 Crac ! Les chaînes du pont-levis ${team === 'red' ? 'du Crâne' : 'du Lion'} ont cassé : il ne pourra plus jamais se relever !` });
+        if (game.rules.waves) endGame(enemyOf(team), 'waves');
     }
 }
 
@@ -445,16 +589,17 @@ function shout(p, i) {
 // ---------------------------------------------------------------- ordres aux troupes
 // attack : marcher sur le château ennemi (comportement de base) ; defend : se poster devant son pont-levis ;
 // follow : escorter un roi (en passant par les portes des châteaux, jamais à travers les murs)
-const ORDERS = ['attack', 'defend', 'follow'];
-const DEFEND_Z = 18, LEASH = { defend: 13, follow: 11 };
+const ORDERS = ['attack', 'defend', 'follow', 'hill'];       // hill : tenir la colline (mode du même nom)
+const DEFEND_Z = 18, LEASH = { defend: 13, follow: 11, hill: 10 };
 const ORDER_TEXT = {
     attack: '⚔️ À l\'attaque ! Les troupes marchent sur le château ennemi.',
     defend: '🛡️ Défendez le château ! Les troupes se postent devant le pont-levis.',
     follow: '👑 Suivez le roi ! Les troupes escortent leur souverain.',
+    hill: '🚩 Tenez la colline ! Les troupes se postent autour du drapeau.',
 };
 
 function setOrder(team, mode, kingId) {
-    if (!ORDERS.includes(mode)) return;
+    if (!ORDERS.includes(mode) || (mode === 'hill' && !game.rules.hill)) return;
     const o = game.orders[team];
     if (o.mode === mode && o.king === kingId) return;
     game.orders[team] = { mode, king: mode === 'follow' ? kingId : null };
@@ -486,7 +631,11 @@ function orderKing(team) {
 function orderGoal(u, s) {
     const team = u.team, king = orderKing(team);
     let gx, gz;
-    if (!king) {
+    if (game.orders[team].mode === 'hill') {
+        // autour du drapeau, chacun à sa place, côté de son château
+        const lx = Math.max(-5, Math.min(5, u.lane * 0.55));
+        gx = lx; gz = -dirOf(team) * ((s.ranged ? 3.2 : 1.2) + u.nx * 0.8);
+    } else if (!king) {
         // défense : une ligne devant son pont-levis (derrière ses barricades), archers et engins un peu en retrait
         const lx = Math.max(-6.5, Math.min(6.5, u.lane * 0.7));
         [gx, , gz] = toWorld(team, lx, 0, (s.ranged ? DEFEND_Z - 2 : DEFEND_Z) + u.nx * 0.8);
@@ -523,13 +672,14 @@ function aiOrders(team) {
     const mine = game.units.filter(u => u.team === team && !u.inside).length;
     if (game.broken[enemy] && bot) setOrder(team, 'follow', bot.id);
     else if (threat >= 3 && threat > mine * 0.8) setOrder(team, 'defend', null);
+    else if (game.rules.hill) setOrder(team, 'hill', null);
     else setOrder(team, 'attack', null);
 }
 
 // ---------------------------------------------------------------- tours de mage et sorts
 function buildMage(team, key) {
     const m = MAGES[key];
-    if (!m || game.phase !== 'playing' || game.mage[team][key] || game.gold[team] < m.build) return false;
+    if (!m || game.phase !== 'playing' || game.rules.noMagic || game.mage[team][key] || game.gold[team] < m.build) return false;
     game.gold[team] -= m.build;
     game.mage[team][key] = true;
     game.stats[team].built++;
@@ -627,6 +777,7 @@ function updateDragons(dt) {
 
 // l'IA bâtit ses tours de mage quand elle est riche, et lance ses sorts quand ça vaut le coup
 function aiMagic(team) {
+    if (game.rules.noMagic) return false;
     const order = game.level === 'hard' ? ['fireball', 'potion', 'dragon'] : ['fireball', 'potion'];
     // après les premières minutes, l'IA met de l'or de côté pour sa prochaine tour de mage (sauf si on l'assiège)
     game.aiSave[team] = null;
@@ -717,24 +868,20 @@ function checkVault() {
     for (const p of players.values()) {
         if (p.dead) continue;
         const [vx, , vz] = toWorld(enemyOf(p.team), VAULT[0], 0, VAULT[1]);
-        if (Math.hypot(p.x - vx, p.z - vz) < VAULT_R && p.y < 3.5) {
-            game.phase = 'over';
-            game.winner = p.team;
-            broadcast({ t: 'over', winner: p.team, stats: game.stats, duration: Math.round((Date.now() - game.startedAt) / 1000) });
-            return;
-        }
+        if (game.rules.waves && !p.bot) continue;            // en mode vagues, le trésor d'en face est hors d'atteinte
+        if (Math.hypot(p.x - vx, p.z - vz) < VAULT_R && p.y < 3.5) return endGame(p.team);
     }
 }
 
 // ---------------------------------------------------------------- IA
 function updateAI(team, dt) {
-    // partie guidée : trêve jusqu'à la fin de la leçon (ou 10 minutes au plus)
+    // partie guidée (ou récit de la campagne) : trêve jusqu'à la fin de la leçon (ou 10 minutes au plus)
     if (game.peace && Date.now() - game.startedAt < 600000) return;
     game.peace = false;
     game.aiTimer[team] -= dt;
     if (game.aiTimer[team] > 0) return;
     game.aiTimer[team] = LEVELS[game.level].think;
-    if (game.level !== 'easy') aiOrders(team);
+    if (game.level !== 'easy' || game.rules.hill) aiOrders(team);
     if (game.level !== 'easy' && (aiDefense(team) || aiMagic(team))) return;
     const enemyUnits = game.units.filter(u => u.team !== team);
     const mine = game.units.filter(u => u.team === team);
@@ -886,12 +1033,15 @@ function step(dt) {
     syncBots();
     if (game.phase === 'playing') {
         game.clock += dt;
-        while (game.riches < RICHES.length && game.clock >= RICHES[game.riches][0]) broadcast({ t: 'msg', text: RICHES[game.riches++][2] });
+        while (!game.rules.waves && game.mode !== 'blitz' && game.riches < RICHES.length && game.clock >= RICHES[game.riches][0]) broadcast({ t: 'msg', text: RICHES[game.riches++][2] });
         for (const t of TEAMS) {
-            if (!(game.peace && game.ai[t])) earn(t, INCOME * (game.riches ? RICHES[game.riches - 1][1] : 1) * dt * (game.ai[t] ? LEVELS[game.level].income : 1));
+            if (game.rules.waves && game.ai[t]) continue;
+            if (!(game.peace && game.ai[t])) earn(t, INCOME * game.rules.income * (game.riches ? RICHES[game.riches - 1][1] : 1) * dt * (game.ai[t] ? LEVELS[game.level].income : 1));
             if (game.ai[t]) updateAI(t, dt);
         }
         trainUnits(dt);
+        if (game.rules.hill) updateHill(dt);
+        if (game.rules.waves) updateWaves(dt);
     }
 
     const units = game.units;
@@ -934,8 +1084,8 @@ function step(dt) {
         const order = game.orders[u.team].mode;
         if (target && order !== 'attack' && !u.inside) {
             const king = orderKing(u.team);
-            const anchor = king ? [king.x, king.z] : (([x, , z]) => [x, z])(toWorld(u.team, 0, 0, DEFEND_Z));
-            if (Math.hypot(target.x - anchor[0], target.z - anchor[1]) > (king ? LEASH.follow : LEASH.defend)) target = null;
+            const anchor = order === 'hill' ? [0, 0] : king ? [king.x, king.z] : (([x, , z]) => [x, z])(toWorld(u.team, 0, 0, DEFEND_Z));
+            if (Math.hypot(target.x - anchor[0], target.z - anchor[1]) > (order === 'hill' ? LEASH.hill : king ? LEASH.follow : LEASH.defend)) target = null;
         }
 
         let goal = null, ordered = false, siegeAim = null, gun = null;
@@ -956,7 +1106,7 @@ function step(dt) {
                         if (isKing) damagePlayer(target, s.dmg, u.team);
                         else if (isTent) damageDefense(enemy, 'tent', s.dmg, u.team);
                         else damageUnit(target, s.dmg * mult, u.team);
-                        fx.push(mult >= 2 ? { k: 'melee', id: u.id, crit: 1, p: [r2(target.x), 1, r2(target.z)] } : { k: 'melee', id: u.id });
+                        fx.push(mult > 1 ? { k: 'melee', id: u.id, crit: 1, p: [r2(target.x), 1, r2(target.z)] } : { k: 'melee', id: u.id });
                     }
                 }
             }
@@ -1093,7 +1243,7 @@ function step(dt) {
         for (const t of TEAMS) {
             // défense des tours : flèches sur les troupes ennemies proches de la porte, sinon sur le roi ennemi
             const tw0 = DEFENSES.towers.levels[game.def[t].towers];
-            const stand = game.hp[t] < CASTLE_HP * LAST_STAND.below && !game.broken[t];
+            const stand = game.hp[t] < game.rules.castleHp * LAST_STAND.below && !game.broken[t];
             const tw = stand ? { ...tw0, cd: tw0.cd * LAST_STAND.cd, range: tw0.range + LAST_STAND.range } : tw0;
             if (stand && !game.lastStand[t]) {
                 game.lastStand[t] = true;
@@ -1220,6 +1370,9 @@ function snapshot() {
             return [q.map(i => TYPES.indexOf(i.type)), q.length ? r2(1 - q[0].left / UNITS[q[0].type].train) : 0];
         })),
         ai: [game.ai.red ? 1 : 0, game.ai.blue ? 1 : 0],
+        // roi de la colline : secondes tenues par camp, détenteur (-1 personne), disputée ; vagues : en cours, repoussées, prochaine dans
+        hl: game.rules.hill ? [Math.floor(game.hill.red), Math.floor(game.hill.blue), TEAMS.indexOf(game.hill.owner), game.hill.contested ? 1 : 0] : undefined,
+        wv: game.rules.waves ? [game.wave, game.waveHeld, Math.ceil(game.waveNext)] : undefined,
         n: [humans('red'), humans('blue')],
         u: game.units.map(u => [u.id, TYPES.indexOf(u.type), u.team === 'red' ? 0 : 1, r2(u.x), r2(u.z),
             Math.round(u.hp / UNITS[u.type].hp * 100), u.state, r2(u.rot)]),
@@ -1259,12 +1412,12 @@ function withRoom(room, fn) {
     try { return fn(); } finally { room.game = game; room.fx = fx; }
 }
 
-function createRoom({ name, password = '', solo = false }) {
+function createRoom({ name, password = '', solo = false, mode = 'classic', stage = 0 }) {
     let id;
     do id = Array.from({ length: 4 }, () => CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)]).join('');
     while (rooms.has(id));
     const room = { id, name, pass: password ? hashPass(password) : null, solo, game: null, players: new Map(), fx: [] };
-    withRoom(room, () => newGame());
+    withRoom(room, () => newGame('waiting', mode, stage));
     rooms.set(id, room);
     console.log(`Salon ${id} créé : « ${name} »${room.pass ? ' (mot de passe)' : ''}${solo ? ' (solo)' : ''}`);
     return room;
@@ -1274,7 +1427,7 @@ function createRoom({ name, password = '', solo = false }) {
 function roomList() {
     return [...rooms.values()].filter(r => !r.solo).map(r => withRoom(r, () => ({
         id: r.id, name: r.name, locked: !!r.pass, n: [humans('red'), humans('blue')],
-        phase: game.phase, ai: game.ai.red || game.ai.blue,
+        phase: game.phase, ai: game.ai.red || game.ai.blue, mode: game.mode,
     })));
 }
 
@@ -1289,16 +1442,15 @@ function enterRoom(ws, room, m) {
     visitors.delete(ws);
     send(ws, {
         t: 'welcome', id, team, mode: room.solo ? 'solo' : 'multi', room: { id: room.id, name: room.name, locked: !!room.pass },
-        units: UNITS, types: TYPES, counters: COUNTERS, defenses: DEFENSES, defKeys: DEF_KEYS, mages: MAGES, mageKeys: MAGE_KEYS, dragonY: DRAGON_Y, castleHp: CASTLE_HP, kingHp: KING_HP, queueMax: QUEUE_MAX, lan: lanAddresses(),
+        units: UNITS, types: TYPES, counters: COUNTERS, defenses: DEFENSES, defKeys: DEF_KEYS, mages: MAGES, mageKeys: MAGE_KEYS, dragonY: DRAGON_Y, kingHp: KING_HP, ...modeInfo(), queueMax: QUEUE_MAX, lan: lanAddresses(),
     });
     console.log(`Joueur ${id} → salon ${room.id} (équipe ${team})`);
 
     if (room.solo) {
-        newGame('waiting');
         game.ai = { red: team !== 'red', blue: team !== 'blue' };
-        game.level = m.tutorial ? 'easy' : LEVELS[m.level] ? m.level : 'normal';
+        game.level = m.tutorial ? 'easy' : game.rules.waves ? 'easy' : LEVELS[m.level] ? m.level : 'normal';
         startGame();
-        game.peace = !!m.tutorial;
+        if (m.tutorial) game.peace = true;
         return;
     }
     // un humain remplace l'IA de son équipe (et son roi)
@@ -1311,13 +1463,16 @@ function enterRoom(ws, room, m) {
 function lobbyMessage(ws, m) {
     const refuse = text => { send(ws, { t: 'refused', text }); return null; };
     if (m.t === 'solo') {
-        const room = createRoom({ name: 'Partie solo', solo: true });
+        const mode = !m.tutorial && MODES[m.mode] ? m.mode : 'classic';
+        const stage = mode === 'campaign' ? Math.max(0, Math.min(CAMPAIGN.length - 1, Math.floor(num(m.stage)))) : 0;
+        const room = createRoom({ name: 'Partie solo', solo: true, mode, stage });
         withRoom(room, () => enterRoom(ws, room, m));
         return room;
     }
     if (m.t === 'create') {
         const name = cleanText(m.name, 24) || 'Salon des chevaliers';
-        const room = createRoom({ name, password: cleanText(m.password, 32) });
+        const mode = MODES[m.mode] && !MODES[m.mode].soloOnly ? m.mode : 'classic';
+        const room = createRoom({ name, password: cleanText(m.password, 32), mode });
         withRoom(room, () => enterRoom(ws, room, m));
         return room;
     }
@@ -1373,8 +1528,10 @@ function gameMessage(p, m) {
             break;
         case 'restart':
             if (game.phase === 'over') {
-                const { ai, level } = game;
-                newGame('waiting');
+                const { ai, level, mode, winner } = game;
+                let { stage } = game;
+                if (m.next && mode === 'campaign' && winner === p.team && stage < CAMPAIGN.length - 1) stage++;
+                newGame('waiting', mode, stage);
                 game.ai = ai;
                 game.level = level;
                 if ((humans('red') || ai.red) && (humans('blue') || ai.blue)) startGame();

@@ -68,6 +68,14 @@ Jeu 3D dans le navigateur, réalisé avec [Three.js](https://threejs.org/) et un
 - **Solo** contre l'IA, avec trois adversaires : l'Écuyer (facile), le Chevalier (normal) et le Dragon (difficile).
 - **Multijoueur** par salons : crée un salon (ouvert ou protégé par un mot de passe) ou rejoins-en un depuis la liste ou avec son code à 4 caractères. Jusqu'à 4 joueurs par salon, deux rois par château.
 
+Chaque bataille (solo ou salon) se joue dans l'un de ces modes :
+
+- ⚔️ **Classique** : brise le pont-levis d'en face, puis file jusqu'à son trésor.
+- ⚡ **Bataille éclair** : châteaux fragiles (1 000 PV), 900 pièces au départ et revenus augmentés de moitié, pour des parties d'environ 5 à 7 minutes.
+- 🚩 **Le roi de la colline** : un drapeau flotte au centre du tapis ; le royaume qui le tient **seul** pendant 3 minutes gagne (s'ils y sont tous les deux, il est disputé et le compte s'arrête). Nouvel ordre **Colline** (touche **M**) ; le trésor reste aussi une victoire.
+- 🌊 **Siège en vagues** (solo) : le château d'en face est imprenable et lâche des vagues de plus en plus fortes (béliers dès la 4ᵉ, canons dès la 5ᵉ, engins de siège dès la 7ᵉ, et le dragon ennemi toutes les 5 vagues). Chaque vague repoussée rapporte de l'or ; la partie s'arrête quand ton château tombe, et le meilleur score est gardé dans le navigateur.
+- 📜 **Campagne du tapis** (solo, depuis l'accueil) : cinq batailles à débloquer l'une après l'autre, chacune avec son récit et sa règle spéciale : *La première nuit* (Écuyer), *Le grimoire égaré* (pas de magie), *Les coffres vides* (or rare), *Le dragon d'en face* (l'ennemi a déjà ses trois tours de mage), *Le siège final* (ennemi difficile, tours renforcées, huile et barricades). L'IA attend que tu aies lu le récit.
+
 ## Lancer le jeu sur son ordinateur
 
 Il faut [Node.js](https://nodejs.org/) 18 ou plus récent.

@@ -346,7 +346,7 @@
 
 
         /* ---------------------------------------------------------------- menu de démarrage */
-        body.menu #bars, body.menu #shop, body.menu #minimap,
+        body.menu #bars, body.menu #shop, body.menu #minimap, body.menu #modeBar, body.menu #story,
         body.menu #lobby, body.menu #prompt, body.menu #crownMsg, body.menu #leftCol, body.menu #aimMsg, body.menu #shoutBtn, body.menu #shoutMenu, body.menu #tuto { display: none !important; }
         #menu {
             position: fixed; inset: 0; display: none; overflow-y: auto;
@@ -527,6 +527,53 @@
         .seats.big { padding: 6px 0; }
         .seats.big .seat { width: 44px; height: 44px; font-size: 22px; }
         .seats.big .sideIco { font-size: 30px; }
+
+        /* modes de jeu : barre de la colline, compteur de vagues, récit de la campagne, cartes du menu */
+        #modeBar { position: fixed; top: 84px; left: 50%; transform: translateX(-50%); z-index: 4; display: none; padding: 4px 12px; font-weight: 800; font-size: 14px; text-align: center; }
+        #modeBar.show { display: block; }
+        #modeBar.hill { width: 300px; }
+        .hillTrack { display: flex; height: 12px; border-radius: 8px; overflow: hidden; background: #e9dcc6; border: 2px solid #3a2a1a; margin-top: 3px; }
+        .hillTrack i { display: block; height: 100%; transition: width .3s; }
+        .hillTrack .hr { background: #d7262e; }
+        .hillTrack .hgap { flex: 1; }
+        .hillTrack .hb { background: #1f5fbf; }
+        .orderBtn[data-order="hill"] { display: none; }
+        body.modeHill .orderBtn[data-order="hill"] { display: flex; }
+        body.noMagic #spells { display: none; }
+        #story {
+            position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(460px, calc(100vw - 32px)); box-sizing: border-box;
+            display: none; z-index: 8; text-align: center; padding: 18px 22px; border-color: #f6c21a; box-shadow: 0 8px 0 #c99a00;
+        }
+        #story.show { display: block; animation: pop .3s cubic-bezier(.3, 1.5, .5, 1); }
+        #storyStage { font-size: 13px; font-weight: 800; opacity: .6; }
+        #storyTitle { font-size: 26px; font-weight: 800; margin: 2px 0 6px; }
+        #storyText { font-size: 16px; line-height: 1.4; margin: 0 0 8px; }
+        #storyRule { font-size: 15px; font-weight: 700; background: #fff3dc; border: 2px dashed #c99a00; border-radius: 12px; padding: 6px 10px; margin-bottom: 10px; }
+        .modeCards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+        .modeCards.small { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        .modeCard {
+            font-family: inherit; cursor: pointer; color: #3a2a1a; background: #fff3dc; border: 3px solid #3a2a1a;
+            border-radius: 14px; box-shadow: 0 4px 0 #3a2a1a; padding: 8px 6px; display: flex; flex-direction: column;
+            align-items: center; text-align: center; gap: 1px; transition: transform .12s;
+        }
+        .modeCard .mdIco { font-size: 24px; line-height: 1.1; }
+        .modeCard b { font-size: 15px; }
+        .modeCard small { font-size: 12px; opacity: .8; line-height: 1.2; }
+        .modeCard.sel { background: var(--team); color: #fff; transform: translateY(-2px); }
+        .stageList { display: flex; flex-direction: column; gap: 8px; }
+        .stageCard {
+            display: flex; align-items: center; gap: 12px; text-align: left; font-family: inherit; cursor: pointer; color: #3a2a1a;
+            background: #fff3dc; border: 3px solid #3a2a1a; border-radius: 16px; box-shadow: 0 4px 0 #3a2a1a; padding: 8px 12px;
+        }
+        .stageCard .stNum { flex: none; width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; font-size: 22px; background: #fffaf2; border: 3px solid #3a2a1a; }
+        .stageCard b { display: block; font-size: 16px; }
+        .stageCard small { display: block; font-size: 13px; opacity: .8; }
+        .stageCard.sel { background: var(--team); color: #fff; }
+        .stageCard:disabled { opacity: .5; cursor: not-allowed; }
+        .chip.mode { background: #fff3dc; }
+        #overNext { display: none; }
+        #overNext.show { display: inline-block; }
+        @media (max-width: 700px) { .modeCards, .modeCards.small { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
         /* fenêtre des réglages (bouton ⚙️) et mentions légales */
         #settings { z-index: 30; }
@@ -798,6 +845,7 @@
                 <button class="orderBtn active" data-order="attack" title="Tes troupes marchent sur le château ennemi."><span class="okey">V</span><span class="oico">⚔️</span><span class="oname">Attaquer</span></button>
                 <button class="orderBtn" data-order="defend" title="Tes troupes se postent devant ton pont-levis et ne s'en éloignent pas."><span class="okey">B</span><span class="oico">🛡️</span><span class="oname">Défendre</span></button>
                 <button class="orderBtn" data-order="follow" title="Tes troupes escortent ton roi, même jusque dans le château ennemi."><span class="okey">N</span><span class="oico">👑</span><span class="oname">Suivre le roi</span></button>
+                <button class="orderBtn" data-order="hill" title="Tes troupes se postent autour du drapeau de la colline."><span class="okey">M</span><span class="oico">🚩</span><span class="oname">Colline</span></button>
             </div>
             <div id="orderHint" class="orderHint">Tes troupes marchent sur le château ennemi.</div>
         </div>
@@ -806,6 +854,14 @@
         <small>· clic droit, Échap ou T pour annuler</small></div>
     <div id="crownMsg" class="panel">Le roi est tombé… Vive le roi !<br>Nouveau couronnement dans <span id="crownTime">5</span></div>
     <div id="toast" class="panel"></div>
+    <div id="modeBar" class="panel"></div>
+    <div id="story" class="panel">
+        <div id="storyStage"></div>
+        <div id="storyTitle"></div>
+        <p id="storyText"></p>
+        <div id="storyRule"></div>
+        <button id="storyGo" class="bigBtn">⚔️ À l'assaut !</button>
+    </div>
 
     <div id="lobby" class="panel">
         <div id="lobbyText">Connexion au serveur…</div>
@@ -818,6 +874,7 @@
         <div id="overText"></div>
         <table id="overStats"></table>
         <div id="overDuration"></div>
+        <button id="overNext" class="bigBtn">Bataille suivante ▶</button>
         <button id="again" class="bigBtn">Rejouer</button>
         <button id="overMenu" class="bigBtn">Menu</button>
     </div>
@@ -849,6 +906,10 @@
                         <span class="tileSub">Ouvre un salon et convie un ami à la bataille</span>
                     </button>
                 </div>
+                <button class="tutoTile" data-go="campaign">
+                    <span class="ttIco">📜</span>
+                    <span><b>Campagne du tapis</b>Cinq batailles contre l'ordinateur, chacune avec son histoire et sa règle spéciale.</span>
+                </button>
                 <button class="tutoTile" id="tutoBtn">
                     <span class="ttIco">📖</span>
                     <span><b>Partie guidée</b>Nouveau sur le tapis ? Apprends à régner pas à pas, l'Écuyer d'en face t'attendra.</span>
@@ -888,6 +949,12 @@
                             toutes les troupes ennemies qu'il survole hors de leur château (mais ne touche pas aux constructions, et ne rapporte pas d'or) !</li>
                         <li><b>🏆 La victoire.</b> Quand un château n'a plus de points de vie, ses chaînes cassent et son pont-levis
                             reste baissé pour toujours. Le premier roi qui entre dans la salle au trésor d'en face remporte la couronne !</li>
+                        <li><b>🎮 Les batailles.</b> ⚔️ <b>Classique</b> : la règle ci-dessus. ⚡ <b>Éclair</b> : châteaux fragiles et coffres pleins,
+                            pour une bataille de cinq minutes. 🚩 <b>Roi de la colline</b> : un drapeau flotte au centre du tapis ; le royaume qui le tient
+                            seul pendant 3 minutes gagne (ordre <b>Colline</b>, touche <b>M</b>) — le trésor reste aussi une victoire. 🌊 <b>Siège en vagues</b>
+                            (solo) : le château d'en face est imprenable et lâche des vagues d'ennemis de plus en plus fortes ; chaque vague repoussée
+                            rapporte de l'or, et l'on compte les vagues tenues avant la chute de ton château. 📜 <b>Campagne</b> : cinq batailles
+                            à la suite, chacune avec sa règle spéciale.</li>
                     </ul>
                 </details>
             </section>
@@ -901,7 +968,9 @@
                 <div class="panel stepPanel">
                     <h3>1. Choisis ton royaume</h3>
                     <div class="teamCards" data-team-picker></div>
-                    <h3>2. Choisis ton adversaire</h3>
+                    <h3>2. Choisis ta bataille</h3>
+                    <div class="modeCards" data-mode-picker="solo"></div>
+                    <h3>3. Choisis ton adversaire</h3>
                     <div class="levelCards">
                         <button class="levelCard" data-level="easy"><span class="lvIco">🌱</span><b>L'Écuyer</b>
                             <small>Un jeune roi qui bâille sur son trône et oublie de lever son pont-levis. (Facile)</small></button>
@@ -912,6 +981,22 @@
                     </div>
                     <small class="note" id="soloNote"></small>
                     <button class="bigBtn go" id="soloBtn">🎺 Sonner la charge !</button>
+                </div>
+            </section>
+
+            <!-- campagne du tapis -->
+            <section class="view" data-view="campaign">
+                <div class="viewHead">
+                    <button class="back" data-go="home">← Retour</button>
+                    <h2>📜 La campagne du tapis</h2>
+                </div>
+                <div class="panel stepPanel">
+                    <h3>1. Choisis ton royaume</h3>
+                    <div class="teamCards" data-team-picker></div>
+                    <h3>2. Choisis ta bataille</h3>
+                    <div class="stageList" id="stageList"></div>
+                    <small class="note" id="campNote"></small>
+                    <button class="bigBtn go" id="campBtn">📯 En route !</button>
                 </div>
             </section>
 
@@ -953,6 +1038,8 @@
                     <span>Salon secret, gardé par un mot de passe 🔒</span>
                 </label>
                 <input id="roomPass" class="menuInput" maxlength="32" type="password" placeholder="Le mot de passe secret" autocomplete="new-password" hidden>
+                <h3>La bataille</h3>
+                <div class="modeCards small" data-mode-picker="create"></div>
                 <h3>Ton royaume</h3>
                 <div class="teamCards small" data-team-picker></div>
                 <small class="note" id="createNote"></small>
