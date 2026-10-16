@@ -67,11 +67,27 @@ Jeu 3D dans le navigateur, réalisé avec [Three.js](https://threejs.org/) et un
 
 - **Solo** contre l'IA, avec trois adversaires : l'Écuyer (facile), le Chevalier (normal) et le Dragon (difficile).
 - **Multijoueur** par salons : crée un salon (ouvert ou protégé par un mot de passe) ou rejoins-en un depuis la liste ou avec son code à 4 caractères. Jusqu'à 4 joueurs par salon, deux rois par château.
+  - **Lien d'invitation** : dans un salon, le bouton « 📋 Copier le lien d'invitation » (ou 🔗 en haut à droite pendant la partie) copie une adresse `…/?salon=ABCD` qui ouvre directement la fenêtre du salon chez l'ami.
+  - **Mode spectateur** : dans la fenêtre d'un salon (même complet), « 👁️ Regarder sans jouer » permet de suivre la bataille avec une caméra libre (ZQSD, glisser, molette), trois vues toutes prêtes (touches 1, 2, 3) et le suivi d'un roi (F). Jusqu'à 8 spectateurs par salon ; un salon protégé demande aussi son mot de passe.
+
+### Les événements de la chambre
+
+De temps en temps, la chambre se mêle de la bataille. Un compteur au-dessus de la mini-carte annonce **quand** viendra le prochain événement (entre 1 min 10 et 2 min 10, au hasard), mais jamais **lequel** : il est tiré au sort au dernier moment, et jamais deux fois de suite le même.
+
+- ⚽ **Le ballon** roule d'un bord à l'autre du tapis : il renverse les troupes sur son passage (30 dégâts) et bouscule les rois.
+- 🐈 **Le chat de la maison** traverse le tapis : il ne fait de mal à personne, mais tout le monde s'écarte de ses pattes.
+- 🔤 **Un cube de lettres** tombe du ciel, écrase ce qui est dessous, puis barre la route 40 secondes : les troupes doivent le contourner.
+- 🐉 **La peluche dragon** se réveille et rugit : toutes les troupes hors des châteaux tremblent de peur, figées 4 secondes.
+- 🌫️ **La veilleuse** s'allume et la brume se lève pendant 25 secondes : les tours de garde y voient moins loin et la mini-carte se brouille.
+- 🪙 **La tirelire** se renverse : douze pièces roulent sur le tapis, 30 pièces d'or chacune pour le roi qui passe dessus.
+
+Pendant la partie guidée (et le récit d'une bataille de la campagne), la chambre reste sage.
 
 Chaque bataille (solo ou salon) se joue dans l'un de ces modes :
 
 - ⚔️ **Classique** : brise le pont-levis d'en face, puis file jusqu'à son trésor.
 - ⚡ **Bataille éclair** : châteaux fragiles (1 000 PV), 900 pièces au départ et revenus augmentés de moitié, pour des parties d'environ 5 à 7 minutes.
+- 🌫️ **Brouillard de guerre** (solo et salons) : un voile sombre couvre le tapis et la mini-carte ; tu ne vois les troupes et le roi ennemis que près de tes troupes (9 unités, 12 pour les archers), de ton roi (11), de ton château (32 : ses tours voient loin) ou de ton dragon. Une boule de feu éclaire 6 secondes l'endroit où elle tombe. C'est le serveur qui trie ce que reçoit chaque royaume : impossible de tricher. L'IA joue avec les mêmes yeux (elle se souvient seulement des troupes déjà aperçues) ; les spectateurs voient tout.
 - 🚩 **Le roi de la colline** : un drapeau flotte au centre du tapis ; le royaume qui le tient **seul** pendant 3 minutes gagne (s'ils y sont tous les deux, il est disputé et le compte s'arrête). Nouvel ordre **Colline** (touche **M**) ; le trésor reste aussi une victoire.
 - 🌊 **Siège en vagues** (solo) : le château d'en face est imprenable et lâche des vagues de plus en plus fortes (béliers dès la 4ᵉ, canons dès la 5ᵉ, engins de siège dès la 7ᵉ, et le dragon ennemi toutes les 5 vagues). Chaque vague repoussée rapporte de l'or ; la partie s'arrête quand ton château tombe, et le meilleur score est gardé dans le navigateur.
 - 📜 **Campagne du tapis** (solo, depuis l'accueil) : cinq batailles à débloquer l'une après l'autre, chacune avec son récit et sa règle spéciale : *La première nuit* (Écuyer), *Le grimoire égaré* (pas de magie), *Les coffres vides* (or rare), *Le dragon d'en face* (l'ennemi a déjà ses trois tours de mage), *Le siège final* (ennemi difficile, tours renforcées, huile et barricades). L'IA attend que tu aies lu le récit.

@@ -225,12 +225,14 @@ const handlers = {
         buildSpells();
         lastHp = [CASTLE_HP, CASTLE_HP];
         applyMode(m);
-        setupPlayer();
+        if (m.spectator) { myId = -1; setupSpectator(m.room); } else setupPlayer();
         buildShop();
         document.body.dataset.team = myTeam;
-        const where = (m.lan.length ? m.lan : [location.origin]).map(a => `<code>${a}</code>`).join(' ou ');
-        ui.lan.innerHTML = `Ton adversaire ouvre ${where}<br>puis rejoint le salon <b>${escapeHtml(m.room.name)}</b>` +
-            ` (code <b>${m.room.id}</b>)${m.room.locked ? ' avec le mot de passe 🔒' : ''}.`;
+        document.body.classList.toggle('multiRoom', !m.room.solo);
+        inviteLink = m.room.solo ? '' : makeInviteLink(m.room, m.lan);
+        ui.lan.innerHTML = m.spectator ? 'Tu regardes ce salon en spectateur : la bataille commencera dès que les deux royaumes auront leur roi.'
+            : `Envoie le lien d'invitation à ton adversaire, ou donne-lui le code <b>${m.room.id}</b>` +
+            ` du salon <b>${escapeHtml(m.room.name)}</b>${m.room.locked ? ' et le mot de passe 🔒' : ''}.`;
     },
     s: onSnapshot,
     start(m) {
@@ -241,7 +243,7 @@ const handlers = {
         modeStart();
     },
     over(m) {
-        play(m.winner === myTeam ? 'victory' : 'defeat');
+        play(spectating || m.winner === myTeam ? 'victory' : 'defeat');
         if (m.stats) showOverStats(m.stats, m.duration || 0);
         onOver(m);
         tutoFinish();
@@ -251,6 +253,14 @@ const handlers = {
         winner = m.winner;
     },
     msg(m) { toast(m.text, 4); },
+    // le salon regardé a fermé (tous les rois sont partis)
+    closed() {
+        phase = 'offline';
+        ui.over.classList.remove('show');
+        ui.lobby.classList.add('show');
+        ui.lobbyText.innerHTML = '🚪 Le salon a fermé ses portes : tous les rois sont partis.';
+        ui.lan.textContent = 'Reviens au menu pour regarder ou rejoindre une autre bataille.';
+    },
     knock(m) {
         knock.set(m.dx * 9, 0, m.dz * 9);
         vy = 5; onGround = false;
@@ -338,6 +348,7 @@ const keys = {};
 let jumpRequest = false;
 
 function updatePlayer(dt) {
+    if (spectating) return spectatorMove(dt);
     if (kingDead) {
         deadTimer = Math.max(0, deadTimer - dt);
         ui.crownTime.textContent = Math.ceil(deadTimer);
@@ -411,6 +422,7 @@ window.addEventListener('keydown', e => {
     keys[e.code] = true;
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
     if (e.repeat) return;
+    if (spectating) return spectatorKey(e.code);
     if (e.code === 'Space') jumpRequest = true;
     if (e.code === 'KeyF') attack();
     if (e.code === 'Escape') setAiming(false);
@@ -692,10 +704,10 @@ function renderRooms() {
         : '';
     mui.roomGrid.innerHTML = create + empty + shown.map(r => {
         const [cls, label] = roomState(r);
-        return `<button class="roomCard" data-room="${r.id}" ${cls === 'full' ? 'disabled' : ''}>
+        return `<button class="roomCard" data-room="${r.id}" title="${cls === 'full' ? 'Complet : tu peux encore regarder la bataille' : ''}">
             <div class="rcTop"><span class="rcName">${escapeHtml(r.name)}</span>${r.locked ? '<span class="rcLock" title="Mot de passe">🔒</span>' : ''}</div>
             ${seatsHtml(r)}
-            <div class="rcBottom"><span class="chip ${cls}">${label}</span>${r.mode && r.mode !== 'classic' && MODE_CARDS[r.mode] ? `<span class="chip mode" title="${MODE_CARDS[r.mode].name}">${MODE_CARDS[r.mode].ico} ${MODE_CARDS[r.mode].name}</span>` : ''}<span class="rcCode">#${r.id}</span></div>
+            <div class="rcBottom"><span class="chip ${cls}">${label}</span>${r.mode && r.mode !== 'classic' && MODE_CARDS[r.mode] ? `<span class="chip mode" title="${MODE_CARDS[r.mode].name}">${MODE_CARDS[r.mode].ico} ${MODE_CARDS[r.mode].name}</span>` : ''}${r.w ? `<span class="chip mode" title="Spectateurs">👁️ ${r.w}</span>` : ''}<span class="rcCode">#${r.id}</span></div>
         </button>`;
     }).join('');
 }
@@ -710,6 +722,7 @@ function updateMenu(m) {
     rooms = m.rooms;
     renderRooms();
     if (joinRoomId) refreshJoin();
+    openInvite();                      // arrivée par un lien d'invitation (…/?salon=ABCD)
 }
 
 // ---- fenêtre « rejoindre »
@@ -734,6 +747,8 @@ function refreshJoin() {
     mui.joinInfo.textContent = `${label} · code #${r.id}`;
     mui.joinPass.hidden = !r.locked;
     mui.joinBtn.disabled = r.n[0] + r.n[1] >= 4;
+    el('watchBtn').disabled = (r.w || 0) >= 8;
+    if (r.w) mui.joinInfo.textContent += ` · 👁️ ${r.w} spectateur${r.w > 1 ? 's' : ''}`;
     renderTeamPickers();
 }
 
@@ -756,6 +771,8 @@ function menuOnline() {
     for (const b of document.querySelectorAll(MENU_BUTTONS)) b.disabled = false;
     el('homeNote').textContent = '';
 }
+// tant que le serveur n'a pas répondu, les boutons attendent : un clic partirait dans le vide
+if (!ws) for (const b of document.querySelectorAll(MENU_BUTTONS)) b.disabled = true;
 
 // ---- interactions (un seul écouteur pour tout le menu)
 menuEl.addEventListener('click', e => {
@@ -818,6 +835,15 @@ mui.joinBtn.addEventListener('click', () => {
     send({ t: 'join', room: r.id, password: mui.joinPass.value, team: menuTeam });
 });
 mui.joinPass.addEventListener('keydown', e => { if (e.key === 'Enter') mui.joinBtn.click(); });
+// mode spectateur : regarder la bataille du salon sans y jouer (même s'il est complet)
+el('watchBtn').addEventListener('click', () => {
+    lastAction = 'join';
+    const r = rooms.find(o => o.id === joinRoomId);
+    if (!r) return;
+    if (r.locked && !mui.joinPass.value) { mui.joinNote.textContent = "Halte ! Même les tribunes demandent le mot de passe secret 🔒"; mui.joinPass.focus(); return; }
+    mui.joinNote.textContent = '';
+    send({ t: 'watch', room: r.id, password: mui.joinPass.value });
+});
 
 // rejoindre directement avec le code donné par un ami
 mui.codeInput.addEventListener('input', () => { mui.codeInput.value = mui.codeInput.value.toUpperCase().replace(/[^A-Z0-9]/g, ''); });
@@ -909,7 +935,7 @@ const STAT_ROWS = [
 ];
 function showOverStats(stats, duration) {
     const me = stats[myTeam], foe = stats[myTeam === 'red' ? 'blue' : 'red'];
-    const foeName = myTeam === 'red' ? '🦁 Lion' : '💀 Crâne', meName = myTeam === 'red' ? '💀 Toi' : '🦁 Toi';
+    const foeName = myTeam === 'red' ? '🦁 Lion' : '💀 Crâne', meName = spectating ? '💀 Crâne' : myTeam === 'red' ? '💀 Toi' : '🦁 Toi';
     el('overStats').innerHTML = `<tr><th></th><th class="me">${meName}</th><th>${foeName}</th></tr>` + STAT_ROWS.map(([label, k, better]) => {
         const a = Math.round(me[k]), b = Math.round(foe[k]);
         const aBest = a !== b && (better === 'more' ? a > b : a < b), bBest = a !== b && !aBest;
@@ -1215,12 +1241,14 @@ const MODE_CARDS = {
     blitz: { ico: '⚡', name: 'Éclair', sub: 'Châteaux fragiles, coffres pleins : 5 minutes' },
     hill: { ico: '🚩', name: 'Colline', sub: 'Tiens le drapeau du centre 3 minutes' },
     waves: { ico: '🌊', name: 'Vagues', sub: 'Tiens bon face aux vagues ennemies', solo: true },
+    fog: { ico: '🌫️', name: 'Brouillard', sub: "Tu ne vois l'ennemi que près des tiens" },
 };
 const MODE_START = {
     classic: "🎺 Sonnez trompettes ! Fais céder le pont-levis d'en face, puis file jusqu'à son trésor !",
     blitz: '⚡ Bataille éclair ! Châteaux fragiles et coffres pleins : tout se joue en quelques minutes !',
     hill: '🚩 Le roi de la colline ! Tiens seul le drapeau du centre pendant 3 minutes (ordre « Colline », touche M).',
     waves: "🌊 Siège en vagues ! Le château d'en face est imprenable : repousse ses vagues aussi longtemps que possible.",
+    fog: '🌫️ Brouillard de guerre ! Tu ne vois les ennemis que près de tes troupes, de ton roi et de ton château. Une boule de feu éclaire là où elle tombe.',
 };
 // la campagne : le récit de chaque bataille (les règles sont sur le serveur, dans CAMPAIGN)
 const foeName = () => (myTeam === 'red' ? 'le Lion' : 'le Crâne');
@@ -1252,8 +1280,10 @@ function applyMode(m) {
     HILL_WIN = m.hillWin || 180;
     if (m.castleHp) { CASTLE_HP = m.castleHp; lastHp = [CASTLE_HP, CASTLE_HP]; }
     document.body.classList.toggle('modeHill', gameMode === 'hill');
+    document.body.classList.toggle('modeWaves', gameMode === 'waves');
     document.body.classList.toggle('noMagic', !!m.noMagic);
     hillFlag.visible = gameMode === 'hill';
+    setFogMode(gameMode === 'fog', m.vision);
     el('modeBar').className = `panel ${gameMode === 'hill' || gameMode === 'waves' ? 'show' : ''} ${gameMode === 'hill' ? 'hill' : ''}`;
 }
 // début de partie : récit de la campagne, ou rappel du mode
@@ -1389,6 +1419,435 @@ el('campBtn').addEventListener('click', () => {
 renderModePickers();
 campStage = Math.min(campDone(), CAMPAIGN_STORY.length - 1);
 renderStages();
+
+// =====================================================================
+//  MODE SPECTATEUR ET LIEN D'INVITATION
+// =====================================================================
+// spectateur : pas de roi ; « pos » devient le point que regarde la caméra libre (ZQSD, glisser, molette)
+let spectating = false, followId = null, inviteLink = '';
+const SPEC_VIEWS = {
+    red: { x: 0, z: -22, yaw: Math.PI, pitch: 0.55, dist: 30 },
+    center: { x: 0, z: 0, yaw: Math.PI / 2, pitch: 0.75, dist: 42 },
+    blue: { x: 0, z: 22, yaw: 0, pitch: 0.55, dist: 30 },
+};
+function specView(k) {
+    const v = SPEC_VIEWS[k];
+    followId = null;
+    pos.set(v.x, 0, v.z);
+    yaw = v.yaw; pitch = v.pitch; camDistWanted = v.dist;
+    refreshSpecBar();
+}
+function setupSpectator(room) {
+    spectating = true;
+    setFogMode(false, null);                                    // les tribunes voient toute la bataille
+    if (player) { scene.remove(player.root); player = null; }
+    document.body.classList.add('spectator');
+    setText(el('specTitle'), `👁️ Spectateur · salon ${room.name}`);
+    setText(el('specHint'), isTouch ? 'Glisse pour tourner, pince pour zoomer.' : 'ZQSD : déplacer · Maj : plus vite · glisser : tourner · molette : zoom · 1, 2, 3 : vues · F : suivre un roi');
+    specView('center');
+}
+function refreshSpecBar() {
+    const king = followId !== null && remotes.get(followId);
+    el('specFollow').classList.toggle('active', !!king);
+    setText(el('specFollow'), king ? `👑 Roi ${king.team === 'red' ? 'du Crâne' : 'du Lion'} ▸` : '👑 Suivre un roi');
+}
+// suivre le roi suivant (un appui de plus passe au suivant, puis revient à la caméra libre)
+function followNext() {
+    const ids = [...remotes.keys()];
+    const i = followId === null ? -1 : ids.indexOf(followId);
+    followId = i + 1 < ids.length ? ids[i + 1] : null;
+    if (followId === null) toast('🎥 Caméra libre', 2);
+    else camDistWanted = Math.min(camDistWanted, 14);         // on se rapproche du roi suivi
+    refreshSpecBar();
+}
+function spectatorMove(dt) {
+    let ix = 0, iz = 0;
+    if (keys.KeyW || keys.ArrowUp) iz += 1;
+    if (keys.KeyS || keys.ArrowDown) iz -= 1;
+    if (keys.KeyA || keys.ArrowLeft) ix -= 1;
+    if (keys.KeyD || keys.ArrowRight) ix += 1;
+    if (touchJoy.active) { ix += touchJoy.x; iz += touchJoy.y; }
+    if (ix || iz) {
+        if (followId !== null) { followId = null; refreshSpecBar(); }
+        const speed = (keys.ShiftLeft || keys.ShiftRight ? 30 : 14) * Math.max(0.6, camDistWanted / 25);
+        const fx = -Math.sin(yaw), fz = -Math.cos(yaw), rx = Math.cos(yaw), rz = -Math.sin(yaw);
+        const l = Math.hypot(ix, iz);
+        pos.x += (fx * iz + rx * ix) / l * speed * dt;
+        pos.z += (fz * iz + rz * ix) / l * speed * dt;
+    }
+    const king = followId !== null && remotes.get(followId);
+    if (followId !== null && !king) { followId = null; refreshSpecBar(); }
+    if (king) pos.copy(king.fig.root.position);
+    pos.x = THREE.MathUtils.clamp(pos.x, -40, 40);
+    pos.z = THREE.MathUtils.clamp(pos.z, -62, 62);
+    const y = king ? pos.y : Math.max(0, groundAt(pos.x, 12, pos.z));
+    visualY = THREE.MathUtils.lerp(visualY, y, 1 - Math.exp(-6 * dt));
+}
+function spectatorKey(code) {
+    const view = { Digit1: 'red', Numpad1: 'red', Digit2: 'center', Numpad2: 'center', Digit3: 'blue', Numpad3: 'blue' }[code];
+    if (view) specView(view);
+    if (code === 'KeyF') followNext();
+}
+el('specBtns').addEventListener('click', e => {
+    const b = e.target.closest('[data-cam]');
+    if (!b) return;
+    b.blur();
+    if (b.dataset.cam === 'menu') location.reload();
+    else if (b.dataset.cam === 'follow') followNext();
+    else specView(b.dataset.cam);
+});
+
+// lien d'invitation : ouvre directement le salon chez l'ami (…/?salon=ABCD)
+function makeInviteLink(room, lan) {
+    const local = ['localhost', '127.0.0.1', '::1'].includes(location.hostname);
+    const base = local && lan.length ? lan[0] : location.origin;
+    return `${base}/?salon=${room.id}`;
+}
+async function copyInvite() {
+    if (!inviteLink) return;
+    let ok = false;
+    try { await navigator.clipboard.writeText(inviteLink); ok = true; } catch { /* page non sécurisée (http en réseau local) */ }
+    if (!ok) {
+        const ta = document.createElement('textarea');
+        ta.value = inviteLink;
+        ta.style.cssText = 'position:fixed;opacity:0';
+        document.body.appendChild(ta);
+        ta.select();
+        try { ok = document.execCommand('copy'); } catch { ok = false; }
+        ta.remove();
+    }
+    toast(ok ? `📋 Lien copié ! Envoie-le à ton ami : ${inviteLink}` : `📋 Copie impossible : donne ce lien à ton ami : ${inviteLink}`, 6);
+}
+el('inviteBtn').addEventListener('click', () => { copyInvite(); el('inviteBtn').blur(); });
+el('linkBtn').addEventListener('click', () => { copyInvite(); el('linkBtn').blur(); });
+
+// arrivée par un lien d'invitation : on ouvre la fenêtre du salon dès que la liste des salons arrive
+let inviteCode = (new URLSearchParams(location.search).get('salon') || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4);
+function openInvite() {
+    if (!inviteCode) return;
+    const code = inviteCode;
+    inviteCode = '';
+    const url = new URL(location.href);
+    url.searchParams.delete('salon');
+    history.replaceState(null, '', url);
+    showView('multi');
+    lastAction = 'multi';
+    if (rooms.some(r => r.id === code)) openJoin(code);
+    else mui.multiNote.textContent = `Le salon #${code} de ton invitation a fermé ses portes… Ouvre-en un nouveau !`;
+}
+
+// =====================================================================
+//  ÉVÉNEMENTS DE LA CHAMBRE (ballon, chat, cube de lettres, peluche, veilleuse, tirelire)
+// =====================================================================
+// Le serveur décide de tout (rm dans l'instantané) : ici, on montre le compte à rebours et on anime les objets.
+const ROOM_LABEL = {
+    ball: '⚽ Le ballon roule !', cat: '🐈 Le chat traverse le tapis !', cube: '🔤 Un cube barre la route',
+    roar: '🐉 La peluche dragon rugit !', mist: '🌫️ La brume de la veilleuse', coins: '🪙 Ramasse les pièces !',
+};
+let roomKind = null, shakeT = 0;
+const mmss = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+
+// texture faite à la main sur un canevas (pas de fichier image)
+function canvasTex(w, h, draw) {
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    draw(c.getContext('2d'), w, h);
+    const t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+}
+// le ballon de plage, à quartiers de couleur
+const roomBall = new THREE.Mesh(new THREE.SphereGeometry(2.2, 32, 20), new THREE.MeshStandardMaterial({
+    roughness: 0.35,
+    map: canvasTex(256, 128, (g, w, h) => {
+        const cols = ['#e63946', '#f6c21a', '#2a7de1', '#ffffff', '#3fae49', '#ff8c1a'];
+        cols.forEach((c, i) => { g.fillStyle = c; g.fillRect(i * w / 6, 0, w / 6 + 1, h); });
+        g.fillStyle = '#ffffff';
+        g.fillRect(0, 0, w, 10); g.fillRect(0, h - 10, w, 10);
+    }),
+}));
+roomBall.castShadow = true;
+// le cube de lettres, comme ceux qui traînent dans la chambre
+const cubeMats = [];
+const CUBE_LETTERS = 'ABCDEFGHIJKLMNOPRSTUVZ';
+const CUBE_COLORS = ['#e63946', '#2a7de1', '#3fae49', '#f6c21a', '#ff8c1a', '#8e5bd6'];
+function letterMat(letter, bg) {
+    return new THREE.MeshStandardMaterial({ roughness: 0.6, map: canvasTex(128, 128, (g, w, h) => {
+        g.fillStyle = bg; g.fillRect(0, 0, w, h);
+        g.strokeStyle = 'rgba(255,255,255,.7)'; g.lineWidth = 10; g.strokeRect(8, 8, w - 16, h - 16);
+        g.fillStyle = '#fffaf2'; g.font = 'bold 84px "Baloo 2", system-ui, sans-serif';
+        g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(letter, w / 2, h / 2 + 6);
+    }) });
+}
+const roomCube = new THREE.Mesh(new THREE.BoxGeometry(3.2, 3.2, 3.2), CUBE_COLORS.map((c, i) => letterMat('ABCDEF'[i], c)));
+roomCube.castShadow = true; roomCube.receiveShadow = true;
+roomCube.userData.frame = true;
+prepare(roomCube);
+let cubeLetter = -1, cubeSolid = false;
+// le cube posé est un obstacle pour le roi du joueur (les troupes, elles, le contournent côté serveur)
+function cubeCollide(on) {
+    if (on === cubeSolid) return;
+    cubeSolid = on;
+    for (const list of [colliders, groundColliders]) {
+        const i = list.indexOf(roomCube);
+        if (on && i < 0) list.push(roomCube);
+        if (!on && i >= 0) list.splice(i, 1);
+    }
+}
+// le chat de la maison : un géant pour les figurines !
+function makeCat() {
+    const fur = new THREE.MeshStandardMaterial({ color: '#e8a253', roughness: 0.9 });
+    const white = new THREE.MeshStandardMaterial({ color: '#fbf3e6', roughness: 0.9 });
+    const dark = new THREE.MeshStandardMaterial({ color: '#b86b2a', roughness: 0.9 });
+    const root = new THREE.Group();
+    const body = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 16), fur);
+    body.scale.set(2.3, 2.1, 4.4); body.position.y = 4.3;
+    const belly = new THREE.Mesh(new THREE.SphereGeometry(1, 20, 12), white);
+    belly.scale.set(1.9, 1.5, 3.6); belly.position.set(0, 3.7, 0.3);
+    for (let i = 0; i < 3; i++) {                                   // rayures
+        const st = new THREE.Mesh(new THREE.TorusGeometry(2.05, 0.18, 6, 24, Math.PI), dark);   // demi-anneau sur le dos
+        st.position.set(0, 4.3, -1.6 + i * 1.3);
+        st.scale.set(1.06, 0.98, 1);
+        root.add(st);
+    }
+    const head = new THREE.Group();
+    head.position.set(0, 6.4, 4.2);
+    const skull = new THREE.Mesh(new THREE.SphereGeometry(1.9, 24, 16), fur);
+    const muzzle = new THREE.Mesh(new THREE.SphereGeometry(0.9, 16, 12), white);
+    muzzle.scale.set(1.2, 0.8, 0.9); muzzle.position.set(0, -0.6, 1.4);
+    const nose = new THREE.Mesh(new THREE.SphereGeometry(0.22, 10, 8), new THREE.MeshStandardMaterial({ color: '#f08aa0', roughness: 0.5 }));
+    nose.position.set(0, -0.25, 2.2);
+    head.add(skull, muzzle, nose);
+    for (const sx of [-1, 1]) {
+        const ear = new THREE.Mesh(new THREE.ConeGeometry(0.7, 1.4, 4), fur);
+        ear.position.set(sx * 1.1, 1.6, -0.1); ear.rotation.z = -sx * 0.35;
+        const eye = new THREE.Mesh(new THREE.SphereGeometry(0.42, 14, 10), new THREE.MeshStandardMaterial({ color: '#7bd64a', roughness: 0.2 }));
+        eye.position.set(sx * 0.75, 0.35, 1.6);
+        const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.2, 10, 8), new THREE.MeshStandardMaterial({ color: '#111', roughness: 0.2 }));
+        pupil.scale.set(0.5, 1.2, 0.5); pupil.position.set(sx * 0.78, 0.35, 1.98);
+        head.add(ear, eye, pupil);
+    }
+    const legs = [];
+    for (const [lx, lz] of [[-1.2, 2.6], [1.2, 2.6], [-1.2, -2.6], [1.2, -2.6]]) {
+        const leg = new THREE.Group();
+        leg.position.set(lx, 3.4, lz);
+        const bone = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.55, 3.2, 12), fur);
+        bone.position.y = -1.6;
+        const paw = new THREE.Mesh(new THREE.SphereGeometry(0.65, 12, 8), white);
+        paw.scale.set(1, 0.6, 1.3); paw.position.set(0, -3.2, 0.25);
+        leg.add(bone, paw);
+        legs.push(leg);
+        root.add(leg);
+    }
+    const tail = new THREE.Group();
+    tail.position.set(0, 5.2, -4.1);
+    const t1 = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.45, 4, 10), fur);
+    t1.position.y = 2; tail.rotation.x = -0.5;
+    const tip = new THREE.Mesh(new THREE.SphereGeometry(0.4, 10, 8), dark);
+    tip.position.y = 4;
+    tail.add(t1, tip);
+    root.add(body, belly, head, tail);
+    root.traverse(o => { if (o.isMesh) o.castShadow = true; });
+    return { root, legs, tail, head };
+}
+const roomCat = makeCat();
+// les pièces de la tirelire
+const coinGeo = new THREE.CylinderGeometry(0.6, 0.6, 0.14, 20).rotateX(Math.PI / 2);
+const coinMat = new THREE.MeshStandardMaterial({ color: '#f6c21a', metalness: 0.9, roughness: 0.25, emissive: '#5a4200', emissiveIntensity: 0.4 });
+const roomCoins = new Map();
+for (const o of [roomBall, roomCube, roomCat.root]) { o.visible = false; scene.add(o); }
+const roomPos = { ball: { x: 0, z: 0 }, cat: { x: 0, z: 0 } };
+
+function onRoomSnapshot(rm) {
+    if (!rm) return;
+    const [next, kind, left, obj] = rm;
+    roomKind = kind;
+    // le compte à rebours : on sait QUAND, jamais QUOI
+    const chip = el('roomEvt');
+    chip.classList.toggle('active', !!kind);
+    chip.classList.toggle('soon', !kind && next <= 10);
+    if (kind) setText(chip, ROOM_LABEL[kind] + (left > 3 && kind !== 'ball' && kind !== 'roar' ? ` · ${mmss(left)}` : ''));
+    else setText(chip, next <= 10 ? `🧸 La chambre frémit… ❓ dans ${mmss(next)}` : `🧸 Prochain événement : ❓ dans ${mmss(next)}`);
+    // objets
+    roomBall.visible = kind === 'ball';
+    roomCat.root.visible = kind === 'cat';
+    if (kind === 'ball' || kind === 'cat') {
+        const p = roomPos[kind], [x, z, dir] = obj;
+        if (Math.abs(x - p.x) > 8) { p.x = x; p.z = z; }            // il vient d'apparaître : pas de glissade depuis l'ancienne place
+        p.tx = x; p.tz = z; p.dir = dir;
+    }
+    if (kind === 'cube') {
+        const [x, z, letter, fall] = obj;
+        if (letter !== cubeLetter) {                                   // une nouvelle lettre sur la face du dessus et de devant
+            cubeLetter = letter;
+            for (const i of [2, 4]) { roomCube.material[i].dispose(); roomCube.material[i] = letterMat(CUBE_LETTERS[letter], CUBE_COLORS[(letter + i) % 6]); }
+        }
+        roomCube.userData.fall = fall;
+        roomCube.position.set(x, 1.6 + (fall / 1.2) ** 2 * 26, z);
+        roomCube.visible = true;
+        cubeCollide(fall <= 0);
+    } else if (roomCube.visible) { roomCube.visible = false; cubeCollide(false); cubeLetter = -1; }
+    // pièces : on ajoute les nouvelles, on retire les ramassées
+    const seen = new Set();
+    if (kind === 'coins') for (const [id, x, z] of obj) {
+        seen.add(id);
+        if (!roomCoins.has(id)) {
+            const m = new THREE.Mesh(coinGeo, coinMat);
+            m.position.set(x, groundAt(x, 6, z) + 0.6, z);
+            m.castShadow = true;
+            m.userData.phase = id * 1.3;
+            scene.add(m);
+            roomCoins.set(id, m);
+        }
+    }
+    for (const [id, m] of roomCoins) if (!seen.has(id)) { scene.remove(m); roomCoins.delete(id); }
+}
+// effets ponctuels envoyés par le serveur (fx)
+function roomFx(f) {
+    if (f.k === 'room') {
+        if (f.e === 'ball') play('boing', null, 0.7);
+        else if (f.e === 'cat') play('meow', null, 0.9);
+        else if (f.e === 'cube') play('whoosh', null, 0.8);
+        else if (f.e === 'roar') { play('plushRoar', null, 1); shakeT = 1.6; }
+        else if (f.e === 'mist') play('mist', null, 0.9);
+        else if (f.e === 'coins') play('coins', null, 1);
+        return true;
+    }
+    if (f.k === 'bump') { puff(new THREE.Vector3(...f.p), '#ffd23a', 4, 1, 1.2); play('boing', f.p, 0.8); return true; }
+    if (f.k === 'cubeLand') {
+        const at = new THREE.Vector3(...f.p);
+        puff(at.clone().setY(0.6), '#e8e2d6', 18, 3, 1);
+        play('thud', f.p, 1);
+        if (Math.hypot(pos.x - at.x, pos.z - at.z) < 25) shakeT = Math.max(shakeT, 0.5);
+        return true;
+    }
+    if (f.k === 'poof') { puff(new THREE.Vector3(...f.p), '#f3ead8', 14, 2.5, 1.5); return true; }
+    if (f.k === 'coin') {
+        puff(new THREE.Vector3(...f.p).setY(0.9), '#ffd23a', 6, 0.9, 2);
+        play('coins', f.p, f.pid === myId ? 1 : 0.5);
+        if (f.pid === myId) toast('🪙 +30 pièces pour ton royaume !', 1.5);
+        return true;
+    }
+    return false;
+}
+// animation, à chaque image
+const MIST_FOG = 0.03, BASE_FOG = scene.fog.density;
+function updateRoomFx(dt, t) {
+    for (const [kind, obj] of [['ball', roomBall], ['cat', roomCat.root]]) {
+        if (!obj.visible) continue;
+        const p = roomPos[kind];
+        if (p.tx === undefined) continue;
+        const k = 1 - Math.exp(-10 * dt), ox = p.x;
+        p.x += (p.tx - p.x) * k; p.z += (p.tz - p.z) * k;
+        if (kind === 'ball') {
+            roomBall.position.set(p.x, 2.2 + Math.abs(Math.sin(t * 5)) * 0.4, p.z);
+            roomBall.rotation.z -= (p.x - ox) / 2.2;                    // il roule
+        } else {
+            const c = roomCat;
+            c.root.position.set(p.x, 0, p.z);
+            c.root.rotation.y = p.dir > 0 ? Math.PI / 2 : -Math.PI / 2;
+            c.legs.forEach((l, i) => { l.rotation.x = Math.sin(t * 6 + (i === 0 || i === 3 ? 0 : Math.PI)) * 0.45; });
+            c.tail.rotation.z = Math.sin(t * 2) * 0.4;
+            c.head.rotation.y = Math.sin(t * 0.7) * 0.3;
+        }
+    }
+    if (roomCube.visible && roomCube.userData.fall > 0) roomCube.rotation.y += dt * 3;
+    for (const m of roomCoins.values()) {
+        m.rotation.y += dt * 4;
+        m.position.y += Math.sin(t * 3 + m.userData.phase) * 0.004;
+    }
+    // brume de la veilleuse : le brouillard s'épaissit doucement, puis se dissipe
+    const fog = roomKind === 'mist' ? MIST_FOG : BASE_FOG;
+    scene.fog.density += (fog - scene.fog.density) * (1 - Math.exp(-1.5 * dt));
+    // la peluche rugit : la caméra tremble
+    if (shakeT > 0) {
+        shakeT = Math.max(0, shakeT - dt);
+        const a = shakeT * 0.35;
+        camera.position.x += (Math.random() - 0.5) * a;
+        camera.position.y += (Math.random() - 0.5) * a;
+    }
+}
+// mini-carte brouillée par la brume : seuls les châteaux restent visibles
+function mistMinimap(W, H) {
+    mm.fillStyle = 'rgba(236, 230, 220, 0.88)';
+    mm.fillRect(0, 0, W, H);
+    for (let i = 0; i < 70; i++) {
+        mm.fillStyle = `rgba(150, 140, 130, ${Math.random() * 0.35})`;
+        mm.fillRect(Math.random() * W, Math.random() * H, 3, 3);
+    }
+    mm.font = '28px system-ui';
+    mm.textAlign = 'center';
+    mm.fillText('🌫️', W / 2, H / 2 + 10);
+}
+
+// =====================================================================
+//  BROUILLARD DE GUERRE (mode de jeu)
+// =====================================================================
+// Le serveur n'envoie que les ennemis que l'on voit ; ici, un voile sombre couvre le tapis, percé autour
+// de ce qui voit : ses troupes, son roi, son château, ses dragons et les boules de feu tombées (fv).
+let fogMode = false, VISION = null, fogTimer = 0;
+const FOG_W = 80, FOG_D = 124, FOG_PX = 2;                       // terrain couvert (unités) et pixels par unité
+const fogCanvas = document.createElement('canvas');
+fogCanvas.width = FOG_W * FOG_PX; fogCanvas.height = FOG_D * FOG_PX;
+const fogCtx = fogCanvas.getContext('2d');
+const fogTex = new THREE.CanvasTexture(fogCanvas);
+const fogPlane = new THREE.Mesh(new THREE.PlaneGeometry(FOG_W, FOG_D).rotateX(-Math.PI / 2),
+    new THREE.MeshBasicMaterial({ map: fogTex, transparent: true, depthWrite: false }));
+fogPlane.position.y = 0.3;
+fogPlane.renderOrder = 1;
+fogPlane.visible = false;
+scene.add(fogPlane);
+// ce qui voit, de notre côté : [x, z, rayon]
+function visionSources() {
+    const src = [];
+    const g = toWorld(myTeam, 0, 0, 9);
+    src.push([g.x, g.z, VISION.castle]);
+    for (const u of unitObjs.values()) if (u.team === myTeam) src.push([u.x, u.z, u.type === 'archer' ? VISION.archer : VISION.unit]);
+    if (!kingDead) src.push([pos.x, pos.z, VISION.king]);
+    for (const r of remotes.values()) if (r.team === myTeam) src.push([r.fig.root.position.x, r.fig.root.position.z, VISION.king]);
+    for (const d of dragonObjs.values()) if (d.team === myTeam) src.push([d.m.root.position.x, d.m.root.position.z, VISION.dragon]);
+    for (const [x, z] of lastSnap?.fv || []) src.push([x, z, VISION.reveal]);
+    return src;
+}
+// voile : sombre partout, éclairci en dégradé autour de chaque source
+function paintFog(ctx, src, toPx, scale) {
+    const { width: w, height: h } = ctx.canvas;
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = 'rgba(28, 24, 44, 0.62)';
+    ctx.fillRect(0, 0, w, h);
+    ctx.globalCompositeOperation = 'destination-out';
+    for (const [x, z, r] of src) {
+        const [px, py] = toPx(x, z), pr = r * scale;
+        const grad = ctx.createRadialGradient(px, py, pr * 0.55, px, py, pr);
+        grad.addColorStop(0, 'rgba(0,0,0,1)');
+        grad.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = grad;
+        ctx.beginPath(); ctx.arc(px, py, pr, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalCompositeOperation = 'source-over';
+}
+function updateFog(dt) {
+    if (!fogMode || !VISION) return;
+    if ((fogTimer -= dt) > 0) return;
+    fogTimer = 1 / 10;                                                   // 10 fois par seconde suffit
+    paintFog(fogCtx, visionSources(), (x, z) => [(x + FOG_W / 2) * FOG_PX, (z + FOG_D / 2) * FOG_PX], FOG_PX);
+    fogTex.needsUpdate = true;
+}
+function setFogMode(on, vision) {
+    fogMode = on && !spectating;                                         // les spectateurs voient tout
+    VISION = vision;
+    fogPlane.visible = fogMode;
+}
+// la mini-carte aussi est voilée (calque à part, posé par-dessus)
+const mmFog = document.createElement('canvas');
+function fogMinimap(mx, my, W, H) {
+    if (!fogMode || !VISION) return;
+    mmFog.width = W; mmFog.height = H;
+    const ctx = mmFog.getContext('2d');
+    paintFog(ctx, visionSources(), (x, z) => [mx(x), my(z)], W / 64);
+    mm.drawImage(mmFog, 0, 0);
+}
 
 // =====================================================================
 //  ORDRES AUX TROUPES
@@ -1739,8 +2198,10 @@ function updateUnits(dt) {
             const walking = speed > 0.3 ? 1 : 0;
             u.model.phase += dt * 9 * walking;
             animateFigure(u.model, walking, dt);
+            // peur (rugissement de la peluche) : la figurine tremble sur place
+            root.rotation.z = u.state === 3 ? Math.sin(performance.now() / 22 + u.id) * 0.12 : 0;
             // l'archer tend son arc quand il tire
-            if (u.type === 'archer' && u.state > 0) {
+            if (u.type === 'archer' && (u.state === 1 || u.state === 2)) {
                 u.model.arms[0].rotation.x = -1.5;
                 u.model.arms[1].rotation.x = -1.3;
             }
@@ -2011,9 +2472,11 @@ function onSnapshot(s) {
         if (!u) u = createUnit(id, TYPES[ti], teamI ? 'blue' : 'red', x, z, rot);
         u.tx = x; u.tz = z; u.hp = hp; u.state = st; u.rot = rot; u.seen = true;
     }
+    // une troupe qui disparaît : morte (petit nuage), ou partie dans le brouillard (elle s'efface sans bruit)
+    const died = fogMode ? new Set(s.fx.filter(f => f.k === 'die').map(f => f.id)) : null;
     for (const [id, u] of unitObjs) {
         if (u.seen) continue;
-        puff(u.model.root.position.clone().setY(u.model.root.position.y + 0.6), '#e8e2d6', u.big ? 10 : 6, u.big ? 1.8 : 1);
+        if (!died || died.has(id)) puff(u.model.root.position.clone().setY(u.model.root.position.y + 0.6), '#e8e2d6', u.big ? 10 : 6, u.big ? 1.8 : 1);
         scene.remove(u.model.root);
         unitObjs.delete(id);
     }
@@ -2046,6 +2509,7 @@ function onSnapshot(s) {
 
     // effets (onglet caché : l'animation est en pause, on ne les accumule pas pour tout rejouer d'un coup au retour)
     for (const f of document.hidden ? [] : s.fx) {
+        if (roomFx(f)) continue;                     // événements de la chambre
         if (f.k === 'arrow' || f.k === 'stone' || f.k === 'ball' || f.k === 'fireball') {
             launch(f.k, f.a, f.b, f.d, f.r);
             if (f.k === 'arrow') play('arrow', f.a);
@@ -2114,6 +2578,7 @@ function onSnapshot(s) {
     setBattle(s.ph === 'playing');
     tutoUpdate(s);
     updateModeBar(s);
+    onRoomSnapshot(s.rm);
     refreshOrders(s);
     castles.red.setMages(Object.fromEntries(MAGE_KEYS.map((k, j) => [k, s.mg[0][j]])));
     castles.blue.setMages(Object.fromEntries(MAGE_KEYS.map((k, j) => [k, s.mg[1][j]])));
@@ -2132,7 +2597,7 @@ function onSnapshot(s) {
     castles.blue.setTreasure(s.g[1]);
     crumble(castles.red, s.hp[0]);
     crumble(castles.blue, s.hp[1]);
-    if (s.hp[myIdx] < lastHp[myIdx] - 30) flashDamage();
+    if (s.hp[myIdx] < lastHp[myIdx] - 30 && !spectating) flashDamage();
     lastHp = s.hp;
 
     updateHud(s, myKingHp);
@@ -2269,12 +2734,14 @@ function updateHud(s, kingHp) {
     if (phase === 'waiting') {
         ui.lobby.classList.add('show');
         ui.lobbyText.innerHTML = myRoom
-            ? `Salon <b>${escapeHtml(myRoom.name)}</b> ${myRoom.locked ? '🔒' : ''} : on guette l'arrivée d'un roi adverse…`
+            ? `Salon <b>${escapeHtml(myRoom.name)}</b> ${myRoom.locked ? '🔒' : ''} : ${spectating ? 'les tribunes attendent les rois…' : "on guette l'arrivée d'un roi adverse…"}`
             : 'En attente d\'un adversaire…';
     } else ui.lobby.classList.remove('show');
 
     if (phase === 'over') {
-        const [title, text] = overTexts(winner === myTeam);
+        const [title, text] = spectating
+            ? [`🏁 Le royaume ${winner === 'red' ? 'du Crâne' : 'du Lion'} l'emporte !`, 'Quelle bataille ! Reste dans les tribunes : la revanche peut commencer à tout moment.']
+            : overTexts(winner === myTeam);
         setText(ui.overTitle, title);
         setText(ui.overText, text);
         ui.over.classList.add('show');
@@ -2317,6 +2784,7 @@ function drawMinimap() {
         mm.lineWidth = 2;
         mm.strokeRect(Math.min(mx(9.5), mx(-9.5)), Math.min(my(c.z + 7.5), my(c.z - 7.5)), Math.abs(mx(9.5) - mx(-9.5)), Math.abs(my(c.z + 7.5) - my(c.z - 7.5)));
     }
+    if (roomKind === 'mist') return mistMinimap(W, H);          // la brume brouille la mini-carte
     for (const u of unitObjs.values()) {
         mm.fillStyle = TEAM[u.team].main;
         const r = u.big ? 4 : 2.5;
@@ -2344,8 +2812,9 @@ function drawMinimap() {
         mm.beginPath(); mm.moveTo(mx(p.x), my(p.z) - 7); mm.lineTo(mx(p.x) + 6, my(p.z)); mm.lineTo(mx(p.x), my(p.z) + 7); mm.lineTo(mx(p.x) - 6, my(p.z)); mm.closePath();
         mm.fill(); mm.stroke();
     }
+    fogMinimap(mx, my, W, H);                                   // brouillard de guerre : voile sur la mini-carte
     for (const r of remotes.values()) dot(r.fig.root.position.x, r.fig.root.position.z, TEAM[r.team].main, '#fff');
-    dot(pos.x, pos.z, '#fff', TEAM[myTeam].main);
+    dot(pos.x, pos.z, '#fff', spectating ? '#f6c21a' : TEAM[myTeam].main);     // spectateur : le point regardé
 }
 
 // =====================================================================
@@ -2358,6 +2827,7 @@ if (new URLSearchParams(location.search).has('perf')) {
         THREE, renderer, scene, camera, send, unitObjs, colliders, groundColliders, castRay, groundAt, unitGround, makeUnitModel, makePlayerModel, quality,
         teleport(x, z) { pos.set(x, groundAt(x, 20, z), z); vy = 0; },
         look(y, p, d) { yaw = y; pitch = p; camDistWanted = d; },
+        room: { ball: roomBall, cat: roomCat, cube: roomCube },
     };
 }
 
@@ -2399,6 +2869,8 @@ function render(now) {
     updatePlayer(dt);
     if (inMenu) menuCamera(t);
     else updateCamera(dt);
+    updateRoomFx(dt, t);
+    updateFog(dt);
     setListener(camera.position.x, camera.position.y, camera.position.z);
     sun.position.copy(pos).add(SUN_OFFSET);
     sun.target.position.copy(pos);
@@ -2424,14 +2896,14 @@ function render(now) {
 
     // entrée dans une salle des coffres
     const vault = vaults.find(v => Math.hypot(pos.x - v.pos.x, pos.z - v.pos.z) < v.r && pos.y < v.pos.y + 2);
-    if (vault && vault !== inVault && lastSnap) {
+    if (vault && vault !== inVault && lastSnap && !spectating) {
         const mine = vault.castle.team === myTeam;
         const g = lastSnap.g[vault.castle.team === 'red' ? 0 : 1];
         toast(mine ? `💰 Le trésor de ton royaume : ${g} pièces d'or. Garde-le bien !` : `💰 Le trésor d'en face ! La couronne est à toi…`, 3);
     }
     inVault = vault || null;
 
-    if (myId !== null && nearOwnGate()) {
+    if (myId !== null && !spectating && nearOwnGate()) {
         ui.prompt.classList.add('show');
         const door = castles[myTeam].door;
         ui.prompt.classList.toggle('broken', door.broken);

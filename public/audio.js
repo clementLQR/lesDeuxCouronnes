@@ -211,10 +211,37 @@ const SOUNDS = {
     click(o) { tone(o, { type: 'triangle', f: 900, f2: 600, dur: 0.06, vol: 0.12 }); },
     deny(o) { tone(o, { type: 'square', f: 220, f2: 160, dur: 0.18, vol: 0.08 }); },
     horn(o) { horn(o, midi(55), 0, 0.5, 0.2); horn(o, midi(62), 0.15, 0.6, 0.15); },   // une troupe sort de la caserne
+    // ---- événements de la chambre
+    boing(o) {                                               // le ballon rebondit sur une troupe
+        tone(o, { f: 160, f2: 420, dur: 0.18, vol: 0.4 });
+        tone(o, { f: 420, f2: 260, t: 0.16, dur: 0.22, vol: 0.25 });
+    },
+    meow(o) {                                                // miaulement du chat de la maison
+        const flt = ctx.createBiquadFilter();
+        flt.type = 'bandpass'; flt.frequency.value = 1400; flt.Q.value = 1.2;
+        flt.connect(o);
+        tone(flt, { type: 'sawtooth', f: 520, f2: 980, dur: 0.28, a: 0.04, vol: 0.9, vib: 8 });
+        tone(flt, { type: 'sawtooth', f: 980, f2: 430, t: 0.26, dur: 0.5, a: 0.02, vol: 0.9, vib: 12 });
+    },
+    plushRoar(o) {                                           // la grosse peluche rugit (grave, étouffé : c'est une peluche)
+        const flt = ctx.createBiquadFilter();
+        flt.type = 'lowpass'; flt.frequency.value = 700;
+        flt.connect(o);
+        tone(flt, { type: 'sawtooth', f: 110, f2: 55, dur: 1.6, a: 0.15, vol: 0.9, vib: 9 });
+        tone(flt, { type: 'square', f: 82, f2: 48, dur: 1.5, a: 0.2, vol: 0.4, vib: 6 });
+        hiss(o, { type: 'lowpass', f: 600, f2: 200, dur: 1.4, a: 0.1, vol: 0.5 });
+    },
+    mist(o) { [84, 81, 77, 74, 72].forEach((n, i) => bell(o, midi(n), i * 0.14, 0.14, 1.6)); },   // la veilleuse s'allume
+    thud(o) {                                                // le cube de lettres touche le sol
+        tone(o, { type: 'sine', f: 120, f2: 45, dur: 0.5, vol: 0.8 });
+        hiss(o, { type: 'lowpass', f: 900, f2: 200, dur: 0.45, vol: 0.6 });
+        tone(o, { type: 'triangle', f: 340, f2: 300, t: 0.02, dur: 0.12, vol: 0.2 });
+    },
+    whoosh(o) { hiss(o, { f: 200, f2: 1600, dur: 0.9, vol: 0.4, q: 1.2, a: 0.3 }); },          // quelque chose tombe du plafond
 };
 
 // limiteur : pas plus d'un même son toutes les X ms (une mêlée de 30 soldats reste supportable)
-const MIN_GAP = { ram: 150, sword: 45, arrow: 40, die: 60, swing: 60, impact: 70, horn: 400, flap: 150 };
+const MIN_GAP = { ram: 150, sword: 45, arrow: 40, die: 60, swing: 60, impact: 70, horn: 400, flap: 150, boing: 90, coins: 60 };
 const lastPlay = {};
 export function play(name, pos = null, vol = 1) {
     if (!ctx || !prefs.sfx || !SOUNDS[name]) return;

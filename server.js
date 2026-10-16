@@ -166,9 +166,13 @@ const MODES = {
     hill:    { name: 'Le roi de la colline', icon: '🚩', hill: true },
     // solo : des vagues d'ennemis de plus en plus fortes ; on compte les vagues repoussées
     waves:   { name: 'Siège en vagues', icon: '🌊', waves: true, soloOnly: true },
+    // brouillard de guerre : chaque royaume ne voit l'ennemi que près de ses troupes, de son roi ou de son château
+    fog:     { name: 'Brouillard de guerre', icon: '🌫️', fog: true },
     campaign: { name: 'Campagne du tapis', icon: '📜', soloOnly: true },
 };
-const HILL = { r: 6.5, win: 180 };          // rayon de la colline, secondes de contrôle pour gagner
+const HILL = { r: 6.5, win: 180 };
+// rayons de vue du brouillard de guerre ; la boule de feu éclaire un moment l'endroit où elle tombe
+const VISION = { unit: 9, archer: 12, king: 11, castle: 32, dragon: 14, reveal: 8, revealTime: 6 };          // rayon de la colline, secondes de contrôle pour gagner
 const WAVES = { first: 25, every: 42, bonus: 40 };
 // la campagne : une suite de batailles contre l'IA, chacune avec sa petite histoire et sa règle spéciale
 // (le texte est sur le client ; ici, seulement les règles)
@@ -184,6 +188,29 @@ function rulesOf(mode, stage = 0) {
     if (mode === 'campaign') return { ...base, ...CAMPAIGN[stage] };
     return { ...base, ...(MODES[mode] || MODES.classic) };
 }
+
+// ---------------------------------------------------------------- événements de la chambre
+// De temps en temps, la chambre se mêle de la bataille. Le compte à rebours du prochain événement est affiché,
+// mais nul ne sait lequel ce sera : il est tiré au hasard (jamais deux fois de suite le même), et l'attente
+// entre deux événements change à chaque fois.
+const ROOM_EVENTS = {
+    ball:  { dur: 7,  text: '⚽ Le ballon roule sur le tapis ! Gare à vos troupes !' },
+    cat:   { dur: 21, text: '🐈 Le chat de la maison traverse le tapis ! Les troupes détalent sur son passage !' },
+    cube:  { dur: 40, text: '🔤 Un cube de lettres tombe du ciel ! Il barrera la route un moment.' },
+    roar:  { dur: 5,  text: '🐉 La peluche dragon se réveille et rugit ! Les troupes tremblent de peur…' },
+    mist:  { dur: 25, text: '🌫️ La veilleuse s\'allume et la brume se lève : les tours y voient moins loin, la mini-carte se brouille !' },
+    coins: { dur: 35, text: '🪙 La tirelire s\'est renversée ! Des pièces roulent sur le tapis : que les rois aillent les ramasser !' },
+};
+const ROOM_KEYS = Object.keys(ROOM_EVENTS);
+// secondes entre deux événements (au hasard) ; EVENT_GAP=15 npm start : des événements très rapprochés pour tester
+const EVENT_GAP = Number(process.env.EVENT_GAP) || 0;
+const ROOM_GAP = EVENT_GAP ? [EVENT_GAP, EVENT_GAP * 1.3] : [70, 130], ROOM_FIRST = EVENT_GAP ? [EVENT_GAP / 2, EVENT_GAP] : [50, 90];
+const BALL = { r: 2.2, speed: 15, dmg: 30, kingDmg: 25 };
+const CAT = { speed: 5, r: 5.5 };
+const CUBE = { half: 1.6, dmg: 60, kingDmg: 40, fall: 1.2 };
+const COIN = { n: 12, gold: 30, r: 1.4 };
+const FEAR = 4, MIST_RANGE = 0.6;
+const CUBE_LETTERS = 'ABCDEFGHIJKLMNOPRSTUVZ';
 
 // Chaque château est construit dans son repère local : façade vers +z local.
 // Rouge : centré en z = -40 (façade vers +z monde) ; Bleu : z = +40, tourné de 180°.
@@ -231,6 +258,7 @@ const TOWERS = {
 // players : id -> { id, ws, team, x, y, z, ry, anim, atkCd, hp, dead, respawn, bot }
 // (le roi de l'IA est un "joueur" sans connexion, avec bot = true)
 let players = new Map();
+let spectators = new Set();    // connexions qui regardent la partie sans y jouer (mode spectateur)
 let nextPlayerId = 1;
 let game;
 
@@ -280,7 +308,12 @@ function newGame(phase = 'waiting', mode = 'classic', stage = 0) {
         aiRelease: { red: false, blue: false },  // l'IA vient de baisser son pont-levis pour lâcher une vague
         peace: false,                            // partie guidée : l'IA attend la fin de la leçon
         hill: { red: 0, blue: 0, owner: null, contested: false, said: { red: 0, blue: 0 } },   // roi de la colline
-        wave: 0, waveNext: WAVES.first, waveHeld: 0, waveSpawn: [], wavesOpen: [],                            // siège en vagues
+        wave: 0, waveNext: WAVES.first, waveHeld: 0, waveSpawn: [], wavesOpen: [],
+        // événement de la chambre : attente avant le prochain, événement en cours (kind, t) et ses objets
+        room: { next: rnd(...ROOM_FIRST), kind: null, t: 0, last: null, o: null },
+        // brouillard de guerre : ce que chaque royaume voit (ids des troupes ennemies, « k » + id des rois), zones éclairées
+        vision: { red: new Set(), blue: new Set() }, reveals: [],
+        spotted: { red: new Set(), blue: new Set() },   // troupes ennemies déjà aperçues (la mémoire de l'IA)                            // siège en vagues
         // statistiques affichées à la fin : par royaume
         stats: { red: newStats(), blue: newStats() },
     };
@@ -318,7 +351,7 @@ function startGame() {
 }
 // ce que le client doit savoir du mode (barres de vie, panneaux)
 function modeInfo() {
-    return { mode: game.mode, stage: game.stage, castleHp: game.rules.castleHp, hillWin: HILL.win, noMagic: !!game.rules.noMagic };
+    return { mode: game.mode, stage: game.stage, castleHp: game.rules.castleHp, hillWin: HILL.win, noMagic: !!game.rules.noMagic, vision: game.rules.fog ? VISION : null };
 }
 
 // ---------------------------------------------------------------- roi de la colline
@@ -406,6 +439,182 @@ function updateWaves(dt) {
     }
 }
 
+// ---------------------------------------------------------------- événements de la chambre
+function startRoomEvent() {
+    const r = game.room;
+    const choices = ROOM_KEYS.filter(k => k !== r.last);
+    const kind = choices[Math.floor(Math.random() * choices.length)];
+    const side = Math.random() < 0.5 ? 1 : -1;
+    Object.assign(r, { kind, last: kind, t: ROOM_EVENTS[kind].dur, o: null });
+    if (kind === 'ball') r.o = { x: -side * 46, z: rnd(-20, 20), vx: side * BALL.speed, hit: new Set() };
+    if (kind === 'cat') r.o = { x: -side * 52, z: rnd(-18, 18), vx: side * CAT.speed, hit: new Set() };
+    if (kind === 'cube') r.o = { x: rnd(-7, 7), z: rnd(-16, 16), letter: Math.floor(Math.random() * CUBE_LETTERS.length), fall: CUBE.fall };
+    if (kind === 'coins') r.o = { list: Array.from({ length: COIN.n }, (_, i) => ({ id: i, x: rnd(-10, 10), z: rnd(-21, 21) })) };
+    if (kind === 'roar') for (const u of game.units) if (!u.inside) u.fear = FEAR;
+    fx.push({ k: 'room', e: kind });
+    broadcast({ t: 'msg', text: ROOM_EVENTS[kind].text });
+}
+function endRoomEvent() {
+    const r = game.room;
+    const end = { cube: '🔤 Le cube de lettres est rangé dans le coffre à jouets.', mist: '🌫️ La veilleuse s\'éteint : la brume se dissipe.',
+        coins: r.o?.list?.length ? '🪙 Les dernières pièces ont roulé sous le lit…' : null }[r.kind];
+    if (end) broadcast({ t: 'msg', text: end });
+    if (r.kind === 'cube') fx.push({ k: 'poof', p: [r2(r.o.x), 1.6, r2(r.o.z)] });
+    Object.assign(r, { kind: null, t: 0, o: null, next: rnd(...ROOM_GAP) });
+}
+// un roi bousculé : le roi d'un joueur recule chez lui (message « knock »), celui de l'IA est déplacé ici
+function bumpKing(p, dx, dz, dmg) {
+    if (dmg) damagePlayer(p, dmg, null);
+    if (p.ws) send(p.ws, { t: 'knock', dx, dz });
+    else { p.x += dx * 2.5; p.z += dz * 2.5; }
+}
+function updateRoom(dt) {
+    const r = game.room;
+    if (!r.kind) {
+        r.next -= dt;
+        if (r.next <= 0) startRoomEvent();
+        return;
+    }
+    r.t -= dt;
+    const o = r.o;
+    const kings = [...players.values()].filter(p => !p.dead && p.y < 3);
+    if (r.kind === 'ball') {
+        // le ballon renverse les troupes sur son passage (une fois chacune) et les pousse sur le côté
+        o.x += o.vx * dt;
+        for (const u of game.units) {
+            if (u.inside) continue;
+            const rad = UNITS[u.type].radius, d = Math.hypot(u.x - o.x, u.z - o.z);
+            if (d > BALL.r + rad) continue;
+            const nz = Math.sign(u.z - o.z) || 1;
+            u.z = o.z + nz * Math.sqrt(Math.max(0, (BALL.r + rad + 0.1) ** 2 - (u.x - o.x) ** 2));
+            u.x += o.vx * dt;
+            if (!o.hit.has(u.id)) { o.hit.add(u.id); damageUnit(u, BALL.dmg, null); fx.push({ k: 'bump', p: [r2(u.x), 0.8, r2(u.z)] }); }
+        }
+        for (const p of kings) {
+            if (o.hit.has('k' + p.id) || Math.hypot(p.x - o.x, p.z - o.z) > BALL.r + 0.5) continue;
+            o.hit.add('k' + p.id);
+            bumpKing(p, Math.sign(o.vx) * 0.6, (Math.sign(p.z - o.z) || 1) * 0.8, BALL.kingDmg);
+        }
+        if (Math.abs(o.x) > 47) r.t = 0;
+    } else if (r.kind === 'cat') {
+        // le chat ne fait de mal à personne, mais tout le monde s'écarte de ses pattes
+        o.x += o.vx * dt;
+        for (const u of game.units) {
+            if (u.inside) continue;
+            const dx = u.x - o.x, dz = u.z - o.z, d = Math.hypot(dx, dz);
+            if (d > CAT.r || d < 0.01) continue;
+            const push = (CAT.r - d) * Math.min(1, dt * 6);
+            u.x += dx / d * push; u.z += dz / d * push;
+        }
+        for (const p of kings) {
+            const dx = p.x - o.x, dz = p.z - o.z, d = Math.hypot(dx, dz);
+            if (d > 3.5 || o.hit.has(p.id)) continue;
+            o.hit.add(p.id);
+            bumpKing(p, dx / (d || 1), dz / (d || 1), 0);
+        }
+        if (Math.abs(o.x) > 53) r.t = 0;
+    } else if (r.kind === 'cube') {
+        // il tombe, écrase ce qui est dessous, puis reste là : les troupes doivent le contourner
+        if (o.fall > 0) {
+            o.fall -= dt;
+            if (o.fall <= 0) {
+                fx.push({ k: 'cubeLand', p: [r2(o.x), 0, r2(o.z)] });
+                for (const u of game.units) {
+                    const lim = CUBE.half + UNITS[u.type].radius + 0.6;
+                    if (!u.inside && Math.abs(u.x - o.x) < lim && Math.abs(u.z - o.z) < lim) damageUnit(u, CUBE.dmg, null);
+                }
+                for (const p of kings) {
+                    const dx = p.x - o.x, dz = p.z - o.z, d = Math.hypot(dx, dz);
+                    if (Math.abs(dx) < CUBE.half + 1 && Math.abs(dz) < CUBE.half + 1) bumpKing(p, dx / (d || 1), dz / (d || 1), CUBE.kingDmg);
+                }
+            }
+        }
+    } else if (r.kind === 'coins') {
+        // le premier roi qui passe sur une pièce la ramasse pour son royaume
+        for (const p of kings) {
+            for (let i = o.list.length - 1; i >= 0; i--) {
+                const c = o.list[i];
+                if (Math.hypot(p.x - c.x, p.z - c.z) > COIN.r) continue;
+                o.list.splice(i, 1);
+                earn(p.team, COIN.gold);
+                fx.push({ k: 'coin', pid: p.id, p: [r2(c.x), 0.5, r2(c.z)] });
+            }
+        }
+        if (!o.list.length) r.t = 0;
+    }
+    if (r.t <= 0) endRoomEvent();
+}
+// le cube posé est un obstacle : une troupe qui bute sur sa face glisse vers le coin le plus proche pour le contourner
+// (les troupes marchent en ligne droite, elles ne savent pas l'éviter d'elles-mêmes)
+function cubeObstacle(dt) {
+    const o = game.room.kind === 'cube' && game.room.o;
+    if (!o || o.fall > 0) return;
+    for (const u of game.units) {
+        if (u.inside) continue;
+        const lim = CUBE.half + UNITS[u.type].radius, dx = u.x - o.x, dz = u.z - o.z;
+        if (Math.abs(dx) >= lim || Math.abs(dz) >= lim) continue;
+        if (lim - Math.abs(dx) < lim - Math.abs(dz)) u.x = o.x + Math.sign(dx) * lim;   // contre un côté : repoussée de côté
+        else {                                                                           // contre la face : elle longe le cube
+            u.z = o.z + (Math.sign(dz) || 1) * lim;
+            u.x += (Math.sign(dx) || (u.id % 2 ? 1 : -1)) * UNITS[u.type].speed * 1.5 * dt;
+        }
+    }
+    for (const p of players.values()) {
+        if (p.ws || p.dead) continue;                                                    // le roi d'un joueur a ses propres collisions
+        const lim = CUBE.half + 0.4, dx = p.x - o.x, dz = p.z - o.z;
+        if (Math.abs(dx) < lim && Math.abs(dz) < lim) p.x = o.x + (Math.sign(dx) || 1) * lim;
+    }
+}
+// ce que le client doit afficher : attente avant le prochain événement, événement en cours et ses objets
+function roomSnapshot() {
+    const r = game.room, o = r.o;
+    let obj;
+    if (r.kind === 'ball' || r.kind === 'cat') obj = [r2(o.x), r2(o.z), o.vx > 0 ? 1 : -1];
+    else if (r.kind === 'cube') obj = [r2(o.x), r2(o.z), o.letter, r2(Math.max(0, o.fall))];
+    else if (r.kind === 'coins') obj = o.list.map(c => [c.id, r2(c.x), r2(c.z)]);
+    return [r.kind ? -1 : Math.ceil(r.next), r.kind, Math.ceil(r.t), obj];
+}
+
+// ---------------------------------------------------------------- brouillard de guerre
+// chaque royaume voit autour de ses troupes, de ses rois, de son château, de ses dragons et des boules de feu tombées
+function updateVision(dt) {
+    game.reveals = game.reveals.filter(r => (r.t -= dt) > 0);
+    for (const t of TEAMS) {
+        const [gx, , gz] = toWorld(t, 0, 0, 9);
+        const src = [[gx, gz, VISION.castle]];
+        for (const u of game.units) if (u.team === t) src.push([u.x, u.z, u.type === 'archer' ? VISION.archer : VISION.unit]);
+        for (const p of players.values()) if (p.team === t && !p.dead) src.push([p.x, p.z, VISION.king]);
+        for (const d of game.dragons) if (d.team === t) src.push([d.x, d.z, VISION.dragon]);
+        for (const r of game.reveals) if (r.team === t) src.push([r.x, r.z, VISION.reveal]);
+        const sees = (x, z) => src.some(([sx, sz, r]) => (x - sx) ** 2 + (z - sz) ** 2 < r * r);
+        const seen = new Set();
+        for (const u of game.units) if (u.team !== t && sees(u.x, u.z)) { seen.add(u.id); game.spotted[t].add(u.id); }
+        for (const p of players.values()) if (p.team !== t && !p.dead && sees(p.x, p.z)) seen.add('k' + p.id);
+        game.vision[t] = seen;
+    }
+}
+// l'IA ne voit pas à travers le brouillard non plus : elle vise ce qu'elle voit, et se souvient de ce qu'elle a aperçu
+const visibleTo = (team, u) => !game.rules.fog || game.vision[team].has(u.id);
+const knownTo = (team, u) => !game.rules.fog || game.spotted[team].has(u.id);
+// instantané : le même pour tous, sauf en brouillard de guerre où chaque royaume ne reçoit que ce qu'il voit
+// (les spectateurs, eux, voient tout)
+function sendSnapshot() {
+    const s = snapshot();
+    if (!game.rules.fog) return broadcast(s);
+    const full = JSON.stringify(s);
+    for (const ws of spectators) if (ws.readyState === 1) ws.send(full);
+    TEAMS.forEach((t, ti) => {
+        const seen = game.vision[t];
+        const msg = JSON.stringify({
+            ...s,
+            u: s.u.filter(u => u[2] === ti || seen.has(u[0])),
+            p: s.p.filter(p => p[1] === ti || seen.has('k' + p[0])),
+            fv: game.reveals.filter(r => r.team === t).map(r => [r2(r.x), r2(r.z)]),
+        });
+        for (const p of players.values()) if (p.team === t && p.ws && p.ws.readyState === 1) p.ws.send(msg);
+    });
+}
+
 // fin de partie : vainqueur, et pourquoi (trésor, colline, château tombé en mode vagues)
 function endGame(winner, how = 'vault') {
     game.phase = 'over';
@@ -470,7 +679,7 @@ function shoot(kind, from, to, dmg, target, attacker) {
 
 function damageUnit(u, dmg, byTeam) {
     u.hp -= dmg;
-    u.lastHitBy = byTeam;
+    if (byTeam) u.lastHitBy = byTeam;          // la chambre (ballon, cube) ne vole pas la prime du dernier ennemi qui l'a touchée
 }
 
 // à 0 PV, le château ne tombe pas : son pont-levis lâche et reste baissé pour de bon
@@ -719,6 +928,7 @@ function fireballHit({ x, z, team }) {
     const m = MAGES.fireball, enemy = enemyOf(team);
     for (const u of game.units) if (u.team === enemy && Math.hypot(u.x - x, u.z - z) < m.radius + UNITS[u.type].radius) damageUnit(u, m.dmg, team);
     burnStructures(enemy, x, z, m.radius, m.structDmg, team);
+    if (game.rules.fog) game.reveals.push({ team, x, z, t: VISION.revealTime });      // la boule de feu éclaire le brouillard
 }
 function burnStructures(enemy, x, z, radius, dmg, team) {
     if (game.def[enemy].tent) {
@@ -789,7 +999,7 @@ function aiMagic(team) {
     }
     const bot = [...players.values()].find(p => p.bot && p.team === team && !p.dead);
     if (!bot) return false;
-    const enemyUnits = game.units.filter(u => u.team !== team && !u.inside);
+    const enemyUnits = game.units.filter(u => u.team !== team && !u.inside && visibleTo(team, u));
     if (bot.hp < KING_HP * 0.5 && castSpell(bot, 'potion')) return true;
     if (game.mage[team].dragon && enemyUnits.length >= 6 && game.gold[team] >= MAGES.dragon.cost + 100 && castSpell(bot, 'dragon')) return true;
     if (game.mage[team].fireball && enemyUnits.length && game.gold[team] >= MAGES.fireball.cost + 30) {
@@ -824,7 +1034,7 @@ function damagePlayer(p, dmg, byTeam) {
     p.hp = 0;
     p.dead = true;
     p.respawn = RESPAWN;
-    earn(byTeam, KING_BOUNTY);
+    if (byTeam) earn(byTeam, KING_BOUNTY);
     game.stats[p.team].kingsFallen++;
     fx.push({ k: 'kingDie', pid: p.id, p: [r2(p.x), r2(p.y), r2(p.z)] });
     send(p.ws, { t: 'dead', time: RESPAWN });
@@ -883,7 +1093,7 @@ function updateAI(team, dt) {
     game.aiTimer[team] = LEVELS[game.level].think;
     if (game.level !== 'easy' || game.rules.hill) aiOrders(team);
     if (game.level !== 'easy' && (aiDefense(team) || aiMagic(team))) return;
-    const enemyUnits = game.units.filter(u => u.team !== team);
+    const enemyUnits = game.units.filter(u => u.team !== team && knownTo(team, u));
     const mine = game.units.filter(u => u.team === team);
     if (!game.aiPlan[team]) {
         const threat = enemyUnits.filter(u => u.type === 'catapult' || u.type === 'cannon' || u.type === 'ram').length;
@@ -1042,6 +1252,7 @@ function step(dt) {
         trainUnits(dt);
         if (game.rules.hill) updateHill(dt);
         if (game.rules.waves) updateWaves(dt);
+        if (!game.peace) updateRoom(dt);
     }
 
     const units = game.units;
@@ -1054,6 +1265,8 @@ function step(dt) {
         const enemy = enemyOf(u.team);
         u.cd -= dt;
         const px = u.x, pz = u.z;
+        // rugissement de la peluche dragon : la troupe tremble sur place
+        if (u.fear > 0) { u.fear -= dt; u.state = 3; u.walking = false; u.prev = [px, pz]; continue; }
 
         // 1. un ennemi à portée d'aggro ? Dans la cour, seul un roi ennemi entré dans le château compte ;
         //    dehors, on ne poursuit pas un roi à l'abri derrière des murs.
@@ -1221,6 +1434,7 @@ function step(dt) {
             }
         }
     }
+    cubeObstacle(dt);
     // troupe qui veut avancer mais n'avance presque plus : elle est bloquée par la foule
     for (const u of units) {
         if (!u.prev) continue;
@@ -1244,7 +1458,8 @@ function step(dt) {
             // défense des tours : flèches sur les troupes ennemies proches de la porte, sinon sur le roi ennemi
             const tw0 = DEFENSES.towers.levels[game.def[t].towers];
             const stand = game.hp[t] < game.rules.castleHp * LAST_STAND.below && !game.broken[t];
-            const tw = stand ? { ...tw0, cd: tw0.cd * LAST_STAND.cd, range: tw0.range + LAST_STAND.range } : tw0;
+            let tw = stand ? { ...tw0, cd: tw0.cd * LAST_STAND.cd, range: tw0.range + LAST_STAND.range } : tw0;
+            if (game.room.kind === 'mist') tw = { ...tw, range: tw.range * MIST_RANGE };       // brume de la veilleuse
             if (stand && !game.lastStand[t]) {
                 game.lastStand[t] = true;
                 broadcast({ t: 'msg', text: `🛡️ Le château ${whoOf(t)} est en danger : ses défenseurs redoublent d'ardeur, les tours tirent plus vite !` });
@@ -1331,6 +1546,7 @@ function step(dt) {
         }
         if (p.bot) updateBot(p, dt);
     }
+    if (game.rules.fog) updateVision(dt);
     checkVault();
 }
 
@@ -1341,6 +1557,7 @@ function send(ws, msg) {
 function broadcast(msg) {
     const s = JSON.stringify(msg);
     for (const p of players.values()) if (p.ws && p.ws.readyState === 1) p.ws.send(s);
+    for (const ws of spectators) if (ws.readyState === 1) ws.send(s);
 }
 
 function snapshot() {
@@ -1373,6 +1590,8 @@ function snapshot() {
         // roi de la colline : secondes tenues par camp, détenteur (-1 personne), disputée ; vagues : en cours, repoussées, prochaine dans
         hl: game.rules.hill ? [Math.floor(game.hill.red), Math.floor(game.hill.blue), TEAMS.indexOf(game.hill.owner), game.hill.contested ? 1 : 0] : undefined,
         wv: game.rules.waves ? [game.wave, game.waveHeld, Math.ceil(game.waveNext)] : undefined,
+        // événement de la chambre : [prochain dans (s, -1 s'il est en cours), en cours, temps restant, objets]
+        rm: roomSnapshot(),
         n: [humans('red'), humans('blue')],
         u: game.units.map(u => [u.id, TYPES.indexOf(u.type), u.team === 'red' ? 0 : 1, r2(u.x), r2(u.z),
             Math.round(u.hp / UNITS[u.type].hp * 100), u.state, r2(u.rot)]),
@@ -1402,13 +1621,14 @@ const num = (v, def = 0) => (typeof v === 'number' && Number.isFinite(v) ? v : d
 const rooms = new Map();       // code -> { id, name, pass, solo, game, players, fx }
 const visitors = new Set();    // connexions encore dans le menu de démarrage
 const MAX_PER_ROOM = 4;        // humains par salon (deux par château)
+const MAX_SPECTATORS = 8;      // spectateurs par salon
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 const hashPass = s => crypto.createHash('sha256').update('les-deux-couronnes:' + s).digest('hex');
 const cleanText = (v, max) => (typeof v === 'string' ? v.replace(/[<>]/g, '').trim().slice(0, max) : '');
 
 function withRoom(room, fn) {
-    game = room.game; players = room.players; fx = room.fx;
+    game = room.game; players = room.players; fx = room.fx; spectators = room.spectators;
     try { return fn(); } finally { room.game = game; room.fx = fx; }
 }
 
@@ -1416,7 +1636,7 @@ function createRoom({ name, password = '', solo = false, mode = 'classic', stage
     let id;
     do id = Array.from({ length: 4 }, () => CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)]).join('');
     while (rooms.has(id));
-    const room = { id, name, pass: password ? hashPass(password) : null, solo, game: null, players: new Map(), fx: [] };
+    const room = { id, name, pass: password ? hashPass(password) : null, solo, game: null, players: new Map(), spectators: new Set(), fx: [] };
     withRoom(room, () => newGame('waiting', mode, stage));
     rooms.set(id, room);
     console.log(`Salon ${id} créé : « ${name} »${room.pass ? ' (mot de passe)' : ''}${solo ? ' (solo)' : ''}`);
@@ -1427,8 +1647,16 @@ function createRoom({ name, password = '', solo = false, mode = 'classic', stage
 function roomList() {
     return [...rooms.values()].filter(r => !r.solo).map(r => withRoom(r, () => ({
         id: r.id, name: r.name, locked: !!r.pass, n: [humans('red'), humans('blue')],
-        phase: game.phase, ai: game.ai.red || game.ai.blue, mode: game.mode,
+        phase: game.phase, ai: game.ai.red || game.ai.blue, mode: game.mode, w: r.spectators.size,
     })));
+}
+
+// constantes du jeu et du mode, envoyées à l'entrée dans un salon (à appeler dans withRoom)
+function welcomeMsg(room, id, team, spectator = false) {
+    return {
+        t: 'welcome', id, team, spectator, room: { id: room.id, name: room.name, locked: !!room.pass, solo: room.solo },
+        units: UNITS, types: TYPES, counters: COUNTERS, defenses: DEFENSES, defKeys: DEF_KEYS, mages: MAGES, mageKeys: MAGE_KEYS, dragonY: DRAGON_Y, kingHp: KING_HP, ...modeInfo(), queueMax: QUEUE_MAX, lan: lanAddresses(),
+    };
 }
 
 // un visiteur entre dans un salon (à appeler dans withRoom)
@@ -1440,10 +1668,7 @@ function enterRoom(ws, room, m) {
     crown(player, false);
     players.set(id, player);
     visitors.delete(ws);
-    send(ws, {
-        t: 'welcome', id, team, mode: room.solo ? 'solo' : 'multi', room: { id: room.id, name: room.name, locked: !!room.pass },
-        units: UNITS, types: TYPES, counters: COUNTERS, defenses: DEFENSES, defKeys: DEF_KEYS, mages: MAGES, mageKeys: MAGE_KEYS, dragonY: DRAGON_Y, kingHp: KING_HP, ...modeInfo(), queueMax: QUEUE_MAX, lan: lanAddresses(),
-    });
+    send(ws, welcomeMsg(room, id, team));
     console.log(`Joueur ${id} → salon ${room.id} (équipe ${team})`);
 
     if (room.solo) {
@@ -1483,6 +1708,18 @@ function lobbyMessage(ws, m) {
         const full = withRoom(room, () => humans('red') + humans('blue') >= MAX_PER_ROOM);
         if (full) return refuse("Ce salon est complet : tous les trônes sont pris.");
         withRoom(room, () => enterRoom(ws, room, m));
+        return room;
+    }
+    // mode spectateur : on regarde la partie d'un salon (même complet) sans y jouer
+    if (m.t === 'watch') {
+        const room = rooms.get(cleanText(m.room, 4).toUpperCase());
+        if (!room || room.solo) return refuse("Ce salon a fermé ses portes.");
+        if (room.pass && hashPass(cleanText(m.password, 32)) !== room.pass) return refuse("Halte ! Ce n'est pas le bon mot de passe 🔒");
+        if (room.spectators.size >= MAX_SPECTATORS) return refuse("Les tribunes de ce salon sont pleines : reviens un peu plus tard.");
+        room.spectators.add(ws);
+        visitors.delete(ws);
+        withRoom(room, () => send(ws, welcomeMsg(room, null, 'red', true)));
+        console.log(`Spectateur → salon ${room.id}`);
         return room;
     }
     return null;
@@ -1551,8 +1788,9 @@ function leaveRoom(room, id) {
             broadcast({ t: 'msg', text: `Le royaume ${team === 'red' ? 'du Crâne' : 'du Lion'} n'a plus de roi : la magie de l'ordinateur reprend la couronne !` });
         }
     });
-    // plus aucun humain : le salon disparaît
+    // plus aucun humain : le salon disparaît (les spectateurs sont prévenus)
     if (withRoom(room, () => humans('red') + humans('blue')) === 0) {
+        for (const ws of room.spectators) send(ws, { t: 'closed' });
         rooms.delete(room.id);
         console.log(`Salon ${room.id} fermé`);
     }
@@ -1593,6 +1831,7 @@ wss.on('connection', ws => {
 
     ws.on('close', () => {
         visitors.delete(ws);
+        room?.spectators.delete(ws);
         if (room && id !== null && rooms.has(room.id)) leaveRoom(room, id);
     });
 });
@@ -1603,7 +1842,7 @@ setInterval(() => {
         withRoom(room, () => {
             try {
                 step(TICK);
-                if (humans('red') + humans('blue')) broadcast(snapshot());
+                if (humans('red') + humans('blue')) sendSnapshot();
             } catch (err) {
                 console.error(`Erreur dans le salon ${room.id} :`, err);
             }

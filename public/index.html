@@ -308,10 +308,14 @@
 
         #toast {
             position: fixed; left: 50%; top: 92px; transform: translateX(-50%) translateY(-20px);
-            font-size: 18px; font-weight: 700; opacity: 0; transition: .25s; pointer-events: none;
+            font-size: 18px; font-weight: 700; opacity: 0; transition: opacity .25s, transform .25s; pointer-events: none;
             border-color: #f6c21a; box-shadow: 0 5px 0 #c99a00;
         }
         #toast.show { opacity: 1; transform: translateX(-50%); }
+        #toast { z-index: 7; }
+        /* barre de la colline ou des vagues sous les barres de vie : les annonces passent en dessous, jamais cachées */
+        body.modeHill #toast { top: 168px; }
+        body.modeWaves #toast { top: 130px; }
 
         #lobby {
             position: fixed; left: 50%; top: 96px; transform: translateX(-50%);
@@ -346,7 +350,7 @@
 
 
         /* ---------------------------------------------------------------- menu de démarrage */
-        body.menu #bars, body.menu #shop, body.menu #minimap, body.menu #modeBar, body.menu #story,
+        body.menu #bars, body.menu #shop, body.menu #minimap, body.menu #modeBar, body.menu #story, body.menu #roomEvt,
         body.menu #lobby, body.menu #prompt, body.menu #crownMsg, body.menu #leftCol, body.menu #aimMsg, body.menu #shoutBtn, body.menu #shoutMenu, body.menu #tuto { display: none !important; }
         #menu {
             position: fixed; inset: 0; display: none; overflow-y: auto;
@@ -549,8 +553,8 @@
         #storyTitle { font-size: 26px; font-weight: 800; margin: 2px 0 6px; }
         #storyText { font-size: 16px; line-height: 1.4; margin: 0 0 8px; }
         #storyRule { font-size: 15px; font-weight: 700; background: #fff3dc; border: 2px dashed #c99a00; border-radius: 12px; padding: 6px 10px; margin-bottom: 10px; }
-        .modeCards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
-        .modeCards.small { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        .modeCards { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+        .modeCards.small { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .modeCard {
             font-family: inherit; cursor: pointer; color: #3a2a1a; background: #fff3dc; border: 3px solid #3a2a1a;
             border-radius: 14px; box-shadow: 0 4px 0 #3a2a1a; padding: 8px 6px; display: flex; flex-direction: column;
@@ -574,6 +578,33 @@
         #overNext { display: none; }
         #overNext.show { display: inline-block; }
         @media (max-width: 700px) { .modeCards, .modeCards.small { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+        /* événements de la chambre : compte à rebours au-dessus de la mini-carte */
+        #roomEvt {
+            position: fixed; right: 16px; bottom: 262px; z-index: 4; padding: 4px 12px; font-weight: 800; font-size: 13.5px;
+            border-color: #b58ad6; box-shadow: 0 4px 0 #7d4fa8; max-width: 260px; text-align: center;
+        }
+        #roomEvt:empty { display: none; }
+        #roomEvt.soon { animation: tutoHi 1s ease-in-out infinite; outline: 3px solid #b58ad6; }
+        #roomEvt.active { background: #f6e8ff; font-size: 15px; }
+        body.noMinimap #roomEvt { bottom: 16px; }
+
+        /* mode spectateur : la boutique, le grimoire et les ordres disparaissent ; caméra libre */
+        #specBar { position: fixed; left: 16px; top: 104px; z-index: 5; display: none; padding: 8px 12px; max-width: min(360px, calc(100vw - 32px)); }
+        body.spectator #specBar { display: block; }
+        body.spectator #shop, body.spectator #leftCol, body.spectator #prompt, body.spectator #crownMsg,
+        body.spectator #shoutBtn, body.spectator #shoutMenu, body.spectator #tuto, body.spectator #again, body.spectator #overNext { display: none !important; }
+        #specTitle { font-weight: 800; font-size: 15px; }
+        #specBtns { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 4px; }
+        #specBtns button { font-size: 13px; padding: 2px 9px; }
+        #specBtns button.active { background: #f6c21a; color: #3a2a1a; }
+        #specHint { font-size: 12.5px; opacity: .75; font-weight: 600; }
+        /* lien d'invitation (salon en attente, bouton 🔗 en jeu) */
+        #linkBtn { display: none !important; }
+        body.multiRoom:not(.menu) #linkBtn { display: inline-block !important; }
+        #inviteRow { display: none; margin-top: 8px; }
+        body.multiRoom #inviteRow { display: block; }
+        .watchBtn { background: #fff3dc !important; color: #3a2a1a !important; }
 
         /* fenêtre des réglages (bouton ⚙️) et mentions légales */
         #settings { z-index: 30; }
@@ -730,6 +761,7 @@
     <div id="soundCtl">
         <button id="sfxBtn" title="Couper les bruitages">🔊</button>
         <button id="musicBtn" title="Couper la musique">🎵</button>
+        <button id="linkBtn" title="Copier le lien d'invitation du salon">🔗</button>
         <button id="qualityBtn" title="Réglages">⚙️</button>
         <button id="shoutBtn" title="Cris rapides">📣</button>
     </div>
@@ -855,6 +887,18 @@
     <div id="crownMsg" class="panel">Le roi est tombé… Vive le roi !<br>Nouveau couronnement dans <span id="crownTime">5</span></div>
     <div id="toast" class="panel"></div>
     <div id="modeBar" class="panel"></div>
+    <div id="roomEvt" class="panel"></div>
+    <div id="specBar" class="panel">
+        <div id="specTitle">👁️ Spectateur</div>
+        <div id="specBtns">
+            <button class="smallBtn" data-cam="red">💀 Crâne</button>
+            <button class="smallBtn" data-cam="center">🚩 Centre</button>
+            <button class="smallBtn" data-cam="blue">🦁 Lion</button>
+            <button class="smallBtn" data-cam="follow" id="specFollow">👑 Suivre un roi</button>
+            <button class="smallBtn" data-cam="menu">↩ Menu</button>
+        </div>
+        <div id="specHint"></div>
+    </div>
     <div id="story" class="panel">
         <div id="storyStage"></div>
         <div id="storyTitle"></div>
@@ -866,6 +910,7 @@
     <div id="lobby" class="panel">
         <div id="lobbyText">Connexion au serveur…</div>
         <div id="lan"></div>
+        <div id="inviteRow"><button id="inviteBtn" class="smallBtn">📋 Copier le lien d'invitation</button></div>
         <button id="menuBtn" class="bigBtn">↩ Retour au menu</button>
     </div>
 
@@ -949,8 +994,16 @@
                             toutes les troupes ennemies qu'il survole hors de leur château (mais ne touche pas aux constructions, et ne rapporte pas d'or) !</li>
                         <li><b>🏆 La victoire.</b> Quand un château n'a plus de points de vie, ses chaînes cassent et son pont-levis
                             reste baissé pour toujours. Le premier roi qui entre dans la salle au trésor d'en face remporte la couronne !</li>
+                        <li><b>🧸 La chambre vit.</b> De temps en temps, la chambre se mêle de la bataille : le ballon roule sur le tapis,
+                            le chat le traverse, un cube de lettres tombe du ciel, la peluche dragon rugit, la veilleuse fait lever la brume
+                            ou la tirelire se renverse (cours ramasser les pièces avec ton roi !). Le compteur au-dessus de la mini-carte dit
+                            <b>quand</b>… mais jamais <b>quoi</b> !</li>
+                        <li><b>👁️ Les tribunes.</b> Envie de voir une bataille sans y prendre part ? Ouvre un salon de la liste et choisis
+                            « Regarder sans jouer ». Pour convier un ami, copie le lien d'invitation de ton salon : il ouvrira directement ta salle.</li>
                         <li><b>🎮 Les batailles.</b> ⚔️ <b>Classique</b> : la règle ci-dessus. ⚡ <b>Éclair</b> : châteaux fragiles et coffres pleins,
-                            pour une bataille de cinq minutes. 🚩 <b>Roi de la colline</b> : un drapeau flotte au centre du tapis ; le royaume qui le tient
+                            pour une bataille de cinq minutes. 🌫️ <b>Brouillard de guerre</b> : tu ne vois les troupes et le roi ennemis que près de tes troupes
+                            (les archers voient plus loin), de ton roi, de ton château ou de ton dragon ; une boule de feu éclaire quelques secondes
+                            l'endroit où elle tombe. 🚩 <b>Roi de la colline</b> : un drapeau flotte au centre du tapis ; le royaume qui le tient
                             seul pendant 3 minutes gagne (ordre <b>Colline</b>, touche <b>M</b>) — le trésor reste aussi une victoire. 🌊 <b>Siège en vagues</b>
                             (solo) : le château d'en face est imprenable et lâche des vagues d'ennemis de plus en plus fortes ; chaque vague repoussée
                             rapporte de l'or, et l'on compte les vagues tenues avant la chute de ton château. 📜 <b>Campagne</b> : cinq batailles
@@ -1059,6 +1112,7 @@
                 <div class="teamCards small" data-team-picker></div>
                 <small class="note" id="joinNote"></small>
                 <button class="bigBtn go" id="joinBtn">⚔️ Franchir les portes</button>
+                <button class="bigBtn watchBtn" id="watchBtn">👁️ Regarder sans jouer</button>
             </div>
         </div>
     </div>
