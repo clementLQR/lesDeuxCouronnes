@@ -275,6 +275,13 @@ const handlers = {
         if (player) player.root.visible = false;
         ui.crownMsg.classList.add('show');
     },
+    // le serveur a refusé une position (trop rapide, à travers un mur, dans les airs…) : on se recale sur la sienne
+    correct(m) {
+        if (spectating || kingDead) return;
+        pos.set(m.x, m.y, m.z);
+        visualY = m.y;
+        vy = 0; knock.set(0, 0, 0);
+    },
     // couronnement : on réapparaît sur le tapis royal de la cour
     respawn(m) {
         kingDead = false;
@@ -2822,7 +2829,8 @@ function drawMinimap() {
 // =====================================================================
 let last = performance.now(), viewW = 0, viewH = 0, sendTimer = 0, mapTimer = 0, firstFrame = false;
 // outil de test (« ?perf » dans l'adresse) : les scripts de mesure accèdent ici aux entrailles du jeu
-if (new URLSearchParams(location.search).has('perf')) {
+// (en local seulement : en ligne, inutile d'offrir une boîte à outils toute prête, et le serveur refuserait de toute façon ses téléportations)
+if (new URLSearchParams(location.search).has('perf') && ['localhost', '127.0.0.1', '::1'].includes(location.hostname)) {
     window.__perf = {
         THREE, renderer, scene, camera, send, unitObjs, colliders, groundColliders, castRay, groundAt, unitGround, makeUnitModel, makePlayerModel, quality,
         teleport(x, z) { pos.set(x, groundAt(x, 20, z), z); vy = 0; },

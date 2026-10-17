@@ -92,6 +92,10 @@ Chaque bataille (solo ou salon) se joue dans l'un de ces modes :
 - 🌊 **Siège en vagues** (solo) : le château d'en face est imprenable et lâche des vagues de plus en plus fortes (béliers dès la 4ᵉ, canons dès la 5ᵉ, engins de siège dès la 7ᵉ, et le dragon ennemi toutes les 5 vagues). Chaque vague repoussée rapporte de l'or ; la partie s'arrête quand ton château tombe, et le meilleur score est gardé dans le navigateur.
 - 📜 **Campagne du tapis** (solo, depuis l'accueil) : cinq batailles à débloquer l'une après l'autre, chacune avec son récit et sa règle spéciale : *La première nuit* (Écuyer), *Le grimoire égaré* (pas de magie), *Les coffres vides* (or rare), *Le dragon d'en face* (l'ennemi a déjà ses trois tours de mage), *Le siège final* (ennemi difficile, tours renforcées, huile et barricades). L'IA attend que tu aies lu le récit.
 
+## Contre la triche
+
+Le serveur fait autorité et ne croit pas le navigateur sur parole : la position envoyée par chaque roi est vérifiée (vitesse de course, pas de téléportation, pas d'envol, on n'entre dans un château que par la porte, pont-levis baissé, on ne traverse pas les barricades) et rectifiée si besoin ; l'or, les achats, les sorts et les coups sont contrôlés ; chaque joueur ne reçoit pas les secrets de l'adversaire (son or exact, ses troupes en formation, ses recharges de sorts, et en brouillard de guerre ce qu'il ne voit pas).
+
 ## Lancer le jeu sur son ordinateur
 
 Il faut [Node.js](https://nodejs.org/) 18 ou plus récent.

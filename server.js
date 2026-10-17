@@ -232,6 +232,79 @@ function onCastleBase(x, z) {
     return TEAMS.some(t => { const [lx, lz] = toLocal(t, x, z); return Math.abs(lx) < 11.6 && Math.abs(lz) < 11.1; });
 }
 
+// ---------------------------------------------------------------- contrôle des déplacements des rois (anti-triche)
+// Le roi d'un joueur est simulé par son navigateur, qui envoie sa position : le serveur la vérifie avant de l'accepter
+// (quelqu'un qui modifie sa position dans la console ne doit pas pouvoir se téléporter, voler ni traverser les murs).
+// - vitesse : un crédit de déplacement qui se remplit à la vitesse de course (plus une marge), et qu'un coup reçu augmente ;
+// - murs : on n'entre dans un château (le sien ou celui d'en face) que par la porte, pont-levis baissé ou brisé ;
+//   on en sort comme on veut (on peut sauter des remparts). Gagner au trésor exige d'être vraiment entré ;
+// - hauteur : hors des châteaux (et de leurs tours), un roi ne monte pas plus haut qu'un saut ;
+// - barricades ennemies : on ne passe pas au travers, il faut les abattre.
+const MOVE = { speed: 7.6, burst: 4, knock: 4, tall: 3.6, bounds: [60, 75] };
+const TRUST_CLIENT = process.env.TRUST_CLIENT === '1';   // TRUST_CLIENT=1 npm start : sans contrôle (scripts de test qui téléportent le roi)
+// intérieur d'un château (entrée seulement par la porte), et abords où l'on reste « dedans » (tours d'angle, remparts)
+const inCastleZone = (lx, lz) => Math.abs(lx) < 9.2 && lz > -7.4 && lz < 7.4;
+const nearCastle = (lx, lz) => Math.abs(lx) < 12.5 && lz > -11.5 && lz < 11.5;
+// là où un roi peut se trouver en hauteur : un château, ses tours et l'arrière (tours de mage)
+const highGround = (lx, lz) => Math.abs(lx) < 12.5 && lz > -21 && lz < 11.5;
+function castleOf(x, z, test) {
+    for (const t of TEAMS) { const [lx, lz] = toLocal(t, x, z); if (test(lx, lz)) return t; }
+    return null;
+}
+const zoneOf = p => castleOf(p.x, p.z, inCastleZone);
+// un coup qui fait reculer le roi d'un joueur : le recul lui donne du crédit de déplacement
+function knockKing(p, dx, dz) {
+    p.move = Math.min(MOVE.burst + MOVE.knock, (p.move ?? MOVE.burst) + MOVE.knock);
+    send(p.ws, { t: 'knock', dx, dz });
+}
+// position proposée par le navigateur : acceptée, rognée, ou refusée (le joueur est alors replacé chez lui)
+function movePlayer(p, m) {
+    const now = Date.now();
+    if (TRUST_CLIENT) {                    // tests en local uniquement (TRUST_CLIENT=1 npm start)
+        p.x = num(m.x, p.x); p.y = num(m.y, p.y); p.z = num(m.z, p.z); p.ry = num(m.ry, p.ry); p.anim = m.a ? 1 : 0;
+        if (zoneOf(p) && p.inside !== zoneOf(p)) p.inside = zoneOf(p);
+        return;
+    }
+    p.move = Math.min(Math.max(MOVE.burst, p.move ?? 0), (p.move ?? MOVE.burst) + (now - (p.moveAt ?? now)) / 1000 * MOVE.speed);
+    p.moveAt = now;
+    let x = Math.max(-MOVE.bounds[0], Math.min(MOVE.bounds[0], num(m.x, p.x)));
+    let z = Math.max(-MOVE.bounds[1], Math.min(MOVE.bounds[1], num(m.z, p.z)));
+    let y = Math.max(-2, Math.min(20, num(m.y, p.y)));
+    let ok = x === m.x && z === m.z;
+    // trop loin pour le temps écoulé : on n'avance que de ce que permet le crédit
+    const d = Math.hypot(x - p.x, z - p.z);
+    if (d > p.move) {
+        const k = p.move / d;
+        x = p.x + (x - p.x) * k; z = p.z + (z - p.z) * k;
+        ok = false;
+    }
+    p.move = Math.max(0, p.move - Math.hypot(x - p.x, z - p.z));
+    // entrer dans un château : seulement par la porte, pont-levis baissé (ou brisé)
+    const zone = castleOf(x, z, inCastleZone);
+    if (zone && p.inside !== zone) {
+        const [lx, lz] = toLocal(zone, x, z);
+        const [plx, plz] = toLocal(zone, p.x, p.z);
+        const viaGate = Math.abs(lx) < 2.4 && Math.abs(plx) < 2.6 && plz >= 6.6 && (game.door[zone] || game.broken[zone]);
+        if (viaGate) p.inside = zone;
+        else { x = p.x; z = p.z; ok = false; }
+    } else if (!zone && p.inside && !castleOf(x, z, (lx, lz) => nearCastle(lx, lz))) p.inside = null;   // bien sorti
+    // barricades ennemies : on ne les traverse pas
+    const foe = enemyOf(p.team);
+    if (game.def[foe].barricade) {
+        const [lx, lz] = toLocal(foe, x, z), [, plz] = toLocal(foe, p.x, p.z);
+        if (Math.abs(lx) < BARRICADE.half + 0.6 && plz >= BARRICADE.z - 0.3 && lz < BARRICADE.z - 0.3) { x = p.x; z = p.z; ok = false; }
+    }
+    // pas d'envol : hors des châteaux, pas plus haut qu'un saut
+    if (y > MOVE.tall && !castleOf(x, z, highGround)) { y = Math.min(p.y, MOVE.tall); ok = false; }
+    p.x = x; p.y = y; p.z = z;
+    p.ry = num(m.ry, p.ry); p.anim = m.a ? 1 : 0;
+    // refusé : on recale le navigateur du joueur (au plus 5 fois par seconde)
+    if (!ok && now - (p.correctAt || 0) > 200) {
+        p.correctAt = now;
+        send(p.ws, { t: 'correct', x: r2(x), y: r2(y), z: r2(z) });
+    }
+}
+
 // lieux dans le repère local d'un château (voir courtyardBuildings dans world.js)
 const BUILDINGS = { barracks: [0, -3.4], workshop: [-2.4, 0] };   // portes de la caserne et de l'atelier
 const MUSTER_Z = 4.6;          // les troupes attendent ici que le pont-levis soit baissé
@@ -313,7 +386,8 @@ function newGame(phase = 'waiting', mode = 'classic', stage = 0) {
         room: { next: rnd(...ROOM_FIRST), kind: null, t: 0, last: null, o: null },
         // brouillard de guerre : ce que chaque royaume voit (ids des troupes ennemies, « k » + id des rois), zones éclairées
         vision: { red: new Set(), blue: new Set() }, reveals: [],
-        spotted: { red: new Set(), blue: new Set() },   // troupes ennemies déjà aperçues (la mémoire de l'IA)                            // siège en vagues
+        spotted: { red: new Set(), blue: new Set() },   // troupes ennemies déjà aperçues (la mémoire de l'IA)
+        sees: { red: () => true, blue: () => true },   // ce que chaque royaume voit (fonction de x, z)                            // siège en vagues
         // statistiques affichées à la fin : par royaume
         stats: { red: newStats(), blue: newStats() },
     };
@@ -465,7 +539,7 @@ function endRoomEvent() {
 // un roi bousculé : le roi d'un joueur recule chez lui (message « knock »), celui de l'IA est déplacé ici
 function bumpKing(p, dx, dz, dmg) {
     if (dmg) damagePlayer(p, dmg, null);
-    if (p.ws) send(p.ws, { t: 'knock', dx, dz });
+    if (p.ws) knockKing(p, dx, dz);
     else { p.x += dx * 2.5; p.z += dz * 2.5; }
 }
 function updateRoom(dt) {
@@ -587,6 +661,7 @@ function updateVision(dt) {
         for (const d of game.dragons) if (d.team === t) src.push([d.x, d.z, VISION.dragon]);
         for (const r of game.reveals) if (r.team === t) src.push([r.x, r.z, VISION.reveal]);
         const sees = (x, z) => src.some(([sx, sz, r]) => (x - sx) ** 2 + (z - sz) ** 2 < r * r);
+        game.sees[t] = sees;
         const seen = new Set();
         for (const u of game.units) if (u.team !== t && sees(u.x, u.z)) { seen.add(u.id); game.spotted[t].add(u.id); }
         for (const p of players.values()) if (p.team !== t && !p.dead && sees(p.x, p.z)) seen.add('k' + p.id);
@@ -596,21 +671,33 @@ function updateVision(dt) {
 // l'IA ne voit pas à travers le brouillard non plus : elle vise ce qu'elle voit, et se souvient de ce qu'elle a aperçu
 const visibleTo = (team, u) => !game.rules.fog || game.vision[team].has(u.id);
 const knownTo = (team, u) => !game.rules.fog || game.spotted[team].has(u.id);
-// instantané : le même pour tous, sauf en brouillard de guerre où chaque royaume ne reçoit que ce qu'il voit
-// (les spectateurs, eux, voient tout)
+// instantané : chaque royaume reçoit le sien. L'adversaire n'y lit ni l'or exact d'en face (seulement la taille du tas
+// dans sa salle au trésor), ni ses troupes en formation, ni ses recharges de sorts ; en brouillard de guerre, seulement
+// ce qu'il voit. Les spectateurs, eux, voient tout.
+const HIDDEN_QUEUE = BUILDING_NAMES.map(() => [[], 0]);
+const FX_ALWAYS = new Set(['fireball', 'room', 'cubeLand', 'poof', 'crown']);    // se voient de partout
 function sendSnapshot() {
     const s = snapshot();
-    if (!game.rules.fog) return broadcast(s);
     const full = JSON.stringify(s);
     for (const ws of spectators) if (ws.readyState === 1) ws.send(full);
     TEAMS.forEach((t, ti) => {
-        const seen = game.vision[t];
-        const msg = JSON.stringify({
+        const oi = 1 - ti, seen = game.vision[t];
+        const mask = (arr, v) => arr.map((a, i) => (i === oi ? v : a));
+        const view = {
             ...s,
-            u: s.u.filter(u => u[2] === ti || seen.has(u[0])),
-            p: s.p.filter(p => p[1] === ti || seen.has('k' + p[0])),
-            fv: game.reveals.filter(r => r.team === t).map(r => [r2(r.x), r2(r.z)]),
-        });
+            g: mask(s.g, Math.min(1200, Math.round(s.g[oi] / 100) * 100)),
+            q: mask(s.q, HIDDEN_QUEUE),
+            sc: mask(s.sc, MAGE_KEYS.map(() => 0)),
+        };
+        if (game.rules.fog) {
+            view.u = s.u.filter(u => u[2] === ti || seen.has(u[0]));
+            view.p = s.p.filter(p => p[1] === ti || seen.has('k' + p[0]));
+            view.fv = game.reveals.filter(r => r.team === t).map(r => [r2(r.x), r2(r.z)]);
+            // effets : pas de position venue du brouillard (tir d'un archer caché, mort d'une troupe hors de vue…)
+            const sees = game.sees[t];
+            view.fx = s.fx.filter(f => FX_ALWAYS.has(f.k) || (f.a ? sees(f.a[0], f.a[2]) : f.p ? sees(f.p[0], f.p[2]) : true));
+        }
+        const msg = JSON.stringify(view);
         for (const p of players.values()) if (p.team === t && p.ws && p.ws.readyState === 1) p.ws.send(msg);
     });
 }
@@ -1021,7 +1108,8 @@ function aiMagic(team) {
 // ---------------------------------------------------------------- les rois
 function crown(p, withFx = true) {
     const [x, y, z] = toWorld(p.team, ...THRONE);
-    Object.assign(p, { x, y, z, ry: dirOf(p.team) > 0 ? 0 : Math.PI, hp: KING_HP, dead: false, respawn: 0, lock: 0.4, route: null });
+    Object.assign(p, { x, y, z, ry: dirOf(p.team) > 0 ? 0 : Math.PI, hp: KING_HP, dead: false, respawn: 0, lock: 0.4, route: null,
+        inside: p.team, move: MOVE.burst, moveAt: Date.now() });
     if (withFx) fx.push({ k: 'crown', pid: p.id, p: [r2(x), r2(y), r2(z)] });
     send(p.ws, { t: 'respawn', x, y, z });
 }
@@ -1059,7 +1147,7 @@ function kingAttack(p) {
         if (dd > 1.9 || Math.abs(o.y - p.y) > 1.5 || !inFront(dx, dz, dd)) continue;
         damagePlayer(o, PLAYER_DMG, p.team);
         if (dd > 0.01) {
-            if (o.ws) send(o.ws, { t: 'knock', dx: dx / dd, dz: dz / dd });
+            if (o.ws) knockKing(o, dx / dd, dz / dd);
             else { o.x += dx / dd * 0.8; o.z += dz / dd * 0.8; }
         }
     }
@@ -1079,6 +1167,7 @@ function checkVault() {
         if (p.dead) continue;
         const [vx, , vz] = toWorld(enemyOf(p.team), VAULT[0], 0, VAULT[1]);
         if (game.rules.waves && !p.bot) continue;            // en mode vagues, le trésor d'en face est hors d'atteinte
+        if (!p.bot && p.inside !== enemyOf(p.team)) continue;   // entré par la porte, pas à travers les murs
         if (Math.hypot(p.x - vx, p.z - vz) < VAULT_R && p.y < 3.5) return endGame(p.team);
     }
 }
@@ -1622,6 +1711,8 @@ const rooms = new Map();       // code -> { id, name, pass, solo, game, players,
 const visitors = new Set();    // connexions encore dans le menu de démarrage
 const MAX_PER_ROOM = 4;        // humains par salon (deux par château)
 const MAX_SPECTATORS = 8;      // spectateurs par salon
+const MAX_ROOMS = 150;         // salons ouverts en même temps sur le serveur
+const MSG_RATE = 60;           // messages par seconde au plus par connexion (le jeu en envoie ~20)
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 const hashPass = s => crypto.createHash('sha256').update('les-deux-couronnes:' + s).digest('hex');
@@ -1687,6 +1778,7 @@ function enterRoom(ws, room, m) {
 // messages du menu : partie solo, création d'un salon, entrée dans un salon
 function lobbyMessage(ws, m) {
     const refuse = text => { send(ws, { t: 'refused', text }); return null; };
+    if ((m.t === 'solo' || m.t === 'create') && rooms.size >= MAX_ROOMS) return refuse("Le château est plein à craquer : réessaie dans un instant.");
     if (m.t === 'solo') {
         const mode = !m.tutorial && MODES[m.mode] ? m.mode : 'classic';
         const stage = mode === 'campaign' ? Math.max(0, Math.min(CAMPAIGN.length - 1, Math.floor(num(m.stage)))) : 0;
@@ -1730,16 +1822,15 @@ function gameMessage(p, m) {
     switch (m.t) {
         case 'pos':
             if (p.dead || p.lock > 0) break;
-            p.x = num(m.x, p.x); p.y = num(m.y, p.y); p.z = num(m.z, p.z);
-            p.ry = num(m.ry, p.ry); p.anim = num(m.a, 0);
+            movePlayer(p, m);
             break;
         case 'spawn':
             if (typeof m.unit === 'string' && UNITS[m.unit]) enqueue(p.team, m.unit);
             break;
         case 'door': {
-            if (game.broken[p.team] || p.dead) break;
+            if (game.broken[p.team] || p.dead || Date.now() - (p.doorAt || 0) < 400) break;
             const gate = toWorld(p.team, 0, 0, 9);
-            if (Math.hypot(p.x - gate[0], p.z - gate[2]) < 6) game.door[p.team] = !game.door[p.team];
+            if (Math.hypot(p.x - gate[0], p.z - gate[2]) < 6) { game.door[p.team] = !game.door[p.team]; p.doorAt = Date.now(); }
             break;
         }
         case 'attack':
@@ -1800,6 +1891,7 @@ function leaveRoom(room, id) {
 // d'un envoi à l'autre, ils se compressent très bien (moins de données pour les connexions lentes et pour l'hébergeur)
 const wss = new WebSocketServer({
     server,
+    maxPayload: 4096,                      // un message de jeu fait quelques dizaines d'octets
     perMessageDeflate: {
         zlibDeflateOptions: { level: 3, memLevel: 7 },
         threshold: 256,                    // les tout petits messages partent tels quels
@@ -1813,7 +1905,14 @@ wss.on('connection', ws => {
     ws.on('pong', () => { ws.isAlive = true; });
     send(ws, { t: 'hello', rooms: roomList(), lan: lanAddresses() });
 
+    let budget = MSG_RATE, budgetAt = Date.now();
     ws.on('message', raw => {
+        // inondation de messages : au-delà du rythme permis, on les ignore
+        const now = Date.now();
+        budget = Math.min(MSG_RATE, budget + (now - budgetAt) / 1000 * MSG_RATE);
+        budgetAt = now;
+        if (budget < 1) return;
+        budget--;
         let m;
         try { m = JSON.parse(raw); } catch { return; }
         if (!m || typeof m !== 'object') return;
